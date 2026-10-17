@@ -50,6 +50,21 @@ Four terminals (or tmux panes):
 Then start a task: `./run.sh brain task "lift the red cup" --steps approach,grasp,lift`.
 Test the call path on its own: `./run.sh bridge call "the cup slipped twice" "should I grab it by the handle or the rim?"`.
 
+## Command mode: talk to Waldo on the phone
+
+The voice agent runs commands from a fixed menu itself. There's no planner in between, so it doesn't need the
+Anthropic key. You say "wave", Waldo asks "go ahead?", you say yes, it waves.
+
+- **Get a call:** text **`call me`** to Waldo's iMessage line (+1 557 234 1193, where you sent `connect @waldo-agent`),
+  or run `./run.sh bridge call --mode command`.
+- **Menu:** `~/.waldo/commands.json` on Waldo (copied from `commands.example.json`). Only `"enabled": true` entries are
+  offered. Out of the box that's `status` and `snapshot` (texts you a room-camera photo); motion commands are off.
+- **Motion needs a real yes.** A command marked `"motion": true` runs only if *you* said yes on the call after
+  Waldo asked. The bridge checks this against the transcript, not the voice model, and each motion needs its own yes.
+- **"Stop"** always goes straight through to the robot's stop tool (`"stop"` in the menu file) and `WALDO_STOP_CMD`.
+- To turn on motion commands (G1 on the gantry, someone on the controller, bay owner OK): set `"enabled": true` on
+  `stand up`, `wave`, etc. and restart the bridge pane. G1 gestures only run while it's balancing (after `stand up`).
+
 ## Phase 0: is Jev good enough?
 
 Record frames of good and failed grasps into a folder, label a few, and measure:
