@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Waldo Controllers</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#16191d;--mute:#5d6672;--line:#dde1e6;--ok:#14804a;--bad:#c42b1c;--acc:#2457c5;--warn:#9a6700}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--card:#171b21;--ink:#e8ecf1;--mute:#8d97a3;--line:#2a313a;--ok:#4cc38a;--bad:#ff6b5e;--acc:#7aa2ff;--warn:#e3b341}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{position:sticky;top:0;z-index:2;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--line)}
+h1{font-size:17px;margin:0}h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:0 0 8px}
+main{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}.wide{grid-column:1/-1}
+button{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:7px;padding:7px 11px;cursor:pointer;min-height:36px}
+button:hover:not(:disabled){border-color:var(--acc)}button:disabled{opacity:.4;cursor:not-allowed}button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.danger{background:var(--bad);color:#fff;border:0;font-weight:700}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.sl{display:grid;grid-template-columns:92px 1fr 64px;gap:8px;align-items:center;margin:4px 0}.sl output{text-align:right;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%}input[type=text]{flex:1;min-width:0;font:inherit;padding:6px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink)}
+.pill{padding:2px 8px;border-radius:99px;font-size:12px;border:1px solid var(--line)}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.hint{color:var(--mute);margin:6px 0 0;font-size:13px}code{font-size:12px}
+#log{font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;max-height:180px;overflow:auto;margin:0}
+.cam{position:relative;background:#000;border-radius:10px;overflow:hidden}.cam img.main{display:block;width:100%;max-height:62vh;object-fit:contain}.cam img.pip{position:absolute;right:10px;bottom:10px;width:24%;border:2px solid #fff;border-radius:6px;cursor:pointer}.cam .lbl{position:absolute;left:10px;top:8px;color:#fff;font-size:12px;background:#0008;padding:2px 8px;border-radius:99px}
+</style></head><body>
+<header>
+ <h1>Waldo · virtual XR controllers <span id="st" class="pill bad">disconnected</span></h1>
+ <div class="row">
+  <input id="url" type="text" size="34" value="wss://100.120.182.66:8012">
+  <button id="conn">Connect</button>
+  <button class="danger" id="damp" title="Both thumbsticks pressed in: teleop's soft emergency stop (damp)">DAMP</button>
+ </div>
+</header>
+<main>
+<section class="wide" style="padding:8px"><div class="cam">
+ <img class="main" id="cam-main" alt="robot head camera" src="http://localhost:8766/stream/head_camera.mjpg">
+ <img class="pip" id="cam-pip" alt="room webcam (click to swap)" title="click to swap views" src="http://localhost:8766/stream/waldo_webcam.mjpg">
+ <span class="lbl" id="cam-lbl">head camera (robot's view)</span></div>
+ <p class="hint" id="cam-hint" hidden>No camera feed. Open the tunnel: <code>ssh -i ~/.ssh/id_ed25519_waldo -N -L 8766:10.2.1.180:8766 waldo@100.120.182.66</code>.
+ Head feed frozen? On waldo: <code>systemctl --user restart g1-camera-viewer</code></p></section>
+<section class="wide"><h2>How this works</h2>
+ <p class="hint" style="margin:0">This page stands in for a Quest/Pico. It streams <code>CONTROLLER_MOVE</code> at 30 Hz to teleop's websocket, the same as a headset does.
+ 1) Start teleop on waldo (<code>--input-mode=controller --motion</code>). 2) Accept the cert once at <a id="certlink" target="_blank">the teleop page</a>. 3) <b>Connect</b> here: the hands stream at teleop's neutral pose.
+ 4) Press <b>r</b> in the teleop terminal. The arms then follow these controls. Pose changes are rate-limited (0.25 m/s, 60°/s), so slider jumps glide.</p></section>
+<section id="L"></section>
+<section id="R"></section>
+<section><h2>Keyboard</h2>
+ <p class="hint" style="margin:0"><b>1</b>/<b>2</b> pick left/right hand ·
+ <b>W/S</b> forward/back · <b>A/D</b> left/right · <b>R/F</b> up/down (2 cm) ·
+ <b>Q/E</b> wrist roll · <b>T/G</b> wrist pitch (10°) ·
+ hold <b>Space</b> = trigger (close gripper) · <b>H</b> home both hands · <b>Esc</b> = DAMP</p>
+ <p class="hint">Active hand: <b id="active">left</b></p></section>
+<section class="wide"><h2>Log</h2><pre id="log"></pre></section>
+</main>
+<script>
+"use strict";
+// ---------- minimal msgpack encoder (maps, arrays, strings, bools, numbers as float64) ----------
+function mp(v){const out=[];const u8=n=>out.push(n&255);const u16=n=>{u8(n>>8);u8(n)};const u32=n=>{u8(n>>>24);u8(n>>>16);u8(n>>>8);u8(n)};
+ const te=new TextEncoder();
+ (function enc(x){
+  if(x===null||x===undefined)return u8(0xc0);
+  if(x===true)return u8(0xc3);if(x===false)return u8(0xc2);
+  if(typeof x==="number"){u8(0xcb);const b=new DataView(new ArrayBuffer(8));b.setFloat64(0,x);for(let i=0;i<8;i++)u8(b.getUint8(i));return}
+  if(typeof x==="string"){const s=te.encode(x);if(s.length<32)u8(0xa0|s.length);else if(s.length<256){u8(0xd9);u8(s.length)}else{u8(0xda);u16(s.length)}s.forEach(u8);return}
+  if(Array.isArray(x)){if(x.length<16)u8(0x90|x.length);else{u8(0xdc);u16(x.length)}x.forEach(enc);return}
+  const k=Object.keys(x);if(k.length<16)u8(0x80|k.length);else{u8(0xde);u16(k.length)}for(const key of k){enc(key);enc(x[key])}
+ })(v);return new Uint8Array(out)}
+
+// ---------- teleop's frame mapping (xr_teleoperate televuer/tv_wrapper.py, controller mode) ----------
+// Teleop: robot hand (waist frame) = Robot(controller - head) + (0.15, 0, 0.45), Robot(x,y,z)_xr = (-z, -x, y).
+// Inverse for a target in the waist frame: xr = head + (-dy, dz, -dx) with d = target - (0.15, 0, 0.45).
+const HEAD=[0,1.5,-0.2], WAIST=[0.15,0,0.45];
+const NEUTRAL={left:[0.25,0.15,0.08],right:[0.25,-0.15,0.08]};   // = teleop's CONST_*_ARM_POSE
+const BOX={x:[0.10,0.50],z:[-0.25,0.45],left:[-0.05,0.45],right:[-0.45,0.05]};
+const R_OX_R=[[0,-1,0],[0,0,1],[-1,0,0]], R_R_OX=[[0,0,-1],[-1,0,0],[0,1,0]];
+const mm=(A,B)=>A.map((r,i)=>B[0].map((_,j)=>r.reduce((s,_,k)=>s+A[i][k]*B[k][j],0)));
+function rpy(r,p,y){const[cr,sr,cp,sp,cy,sy]=[Math.cos(r),Math.sin(r),Math.cos(p),Math.sin(p),Math.cos(y),Math.sin(y)];
+ return[[cy*cp,cy*sp*sr-sy*cr,cy*sp*cr+sy*sr],[sy*cp,sy*sp*sr+cy*cr,sy*sp*cr-cy*sr],[-sp,cp*sr,cp*cr]]}
+function xrMatrix(t,o){ // t: waist-frame xyz (m), o: robot-frame roll/pitch/yaw (rad) -> 16 floats, column-major
+ const d=[t[0]-WAIST[0],t[1]-WAIST[1],t[2]-WAIST[2]], p=[HEAD[0]-d[1],HEAD[1]+d[2],HEAD[2]-d[0]];
+ const R=mm(mm(R_OX_R,rpy(...o)),R_R_OX);
+ return[R[0][0],R[1][0],R[2][0],0, R[0][1],R[1][1],R[2][1],0, R[0][2],R[1][2],R[2][2],0, p[0],p[1],p[2],1]}
+const HEAD_MATRIX=[1,0,0,0,0,1,0,0,0,0,1,0,HEAD[0],HEAD[1],HEAD[2],1];
+
+// ---------- controller state ----------
+const S={};for(const h of["left","right"])S[h]={goal:[...NEUTRAL[h]],pos:[...NEUTRAL[h]],ogoal:[0,0,0],ori:[0,0,0],
+ trigger:0,squeeze:0,stickPress:false,a:false,b:false};
+let ws=null,live=false,dampUntil=0,active="left",spaceDown=false;
+const $=id=>document.getElementById(id);
+const log=m=>{$("log").textContent=`${new Date().toLocaleTimeString()}  ${m}\n`+$("log").textContent};
+const clamp=(v,[lo,hi])=>Math.min(hi,Math.max(lo,v));
+
+function panel(h){const L=h[0].toUpperCase()+h.slice(1),sec=$(h==="left"?"L":"R"),y=BOX[h];
+ sec.innerHTML=`<h2>${L} controller</h2>
+ ${sl(h,"x","forward",BOX.x,0.01,"m")}${sl(h,"y","left (+)",y,0.01,"m")}${sl(h,"z","up",BOX.z,0.01,"m")}
+ ${sl(h,"roll","wrist roll",[-90,90],5,"°")}${sl(h,"pitch","wrist pitch",[-90,90],5,"°")}${sl(h,"yaw","wrist yaw",[-90,90],5,"°")}
+ ${sl(h,"trigger","trigger",[0,1],0.05,"")}${sl(h,"squeeze","squeeze",[0,1],0.05,"")}
+ <div class="row" style="margin-top:8px"><button data-h="${h}" data-btn="a">${h==="right"?"A (quits teleop)":"X"}</button>
+  <button data-h="${h}" data-btn="b">${h==="right"?"B":"Y"}</button>
+  <button data-h="${h}" data-btn="stickPress">stick press</button>
+  <button onclick="home('${h}')">Home</button></div>
+ <p class="hint">No thumbstick: walking is off by site rule (teleop would walk the robot on it).</p>`;
+ sec.querySelectorAll("input[type=range]").forEach(inp=>inp.addEventListener("input",()=>fromSlider(h,inp)));
+ sec.querySelectorAll("button[data-btn]").forEach(b=>{const k=b.dataset.btn;
+  const set=v=>{S[h][k]=v;b.classList.toggle("on",v)};
+  b.addEventListener("pointerdown",()=>{if(k==="a"&&h==="right"&&!confirm("Right A quits teleop. Send it?"))return;set(true)});
+  ["pointerup","pointerleave"].forEach(e=>b.addEventListener(e,()=>set(false)))});
+}
+function sl(h,k,label,[lo,hi],step,unit){const v=k==="trigger"||k==="squeeze"?0:(k==="roll"||k==="pitch"||k==="yaw"?0:NEUTRAL[h]["xyz".indexOf(k)]);
+ return`<div class="sl"><span>${label}</span><input type="range" id="${h}-${k}" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${v}"><output id="${h}-${k}-o">${(+v).toFixed(2)}${unit}</output></div>`}
+function fromSlider(h,inp){const k=inp.dataset.k,v=+inp.value;$(`${h}-${k}-o`).textContent=v.toFixed(2)+(["roll","pitch","yaw"].includes(k)?"°":(k.length===1?"m":""));
+ if("xyz".includes(k)&&k.length===1)S[h].goal["xyz".indexOf(k)]=v;
+ else if(["roll","pitch","yaw"].includes(k))S[h].ogoal[["roll","pitch","yaw"].indexOf(k)]=v*Math.PI/180;
+ else S[h][k]=v}
+function setSlider(h,k,v){const inp=$(`${h}-${k}`);inp.value=v;fromSlider(h,inp)}
+function home(h){["x","y","z"].forEach((k,i)=>setSlider(h,k,NEUTRAL[h][i]));["roll","pitch","yaw"].forEach(k=>setSlider(h,k,0))}
+
+// ---------- stream ----------
+const VMAX=0.25*0.033, WMAX=60*Math.PI/180*0.033; // per 33 ms tick
+const step=(cur,goal,max)=>cur.map((c,i)=>c+Math.max(-max,Math.min(max,goal[i]-c)));
+function state(h){const s=S[h],damp=Date.now()<dampUntil;
+ return{trigger:s.trigger>0.5||(spaceDown&&active===h),triggerValue:Math.max(s.trigger,spaceDown&&active===h?1:0),
+  squeeze:s.squeeze>0.5,squeezeValue:s.squeeze,thumbstick:s.stickPress||damp,thumbstickValue:[0,0] /* never walk: site rule */,aButton:s.a,bButton:s.b}}
+function tick(){if(!live||!ws||ws.readyState!==1)return;
+ for(const h of["left","right"]){const s=S[h];s.goal=[clamp(s.goal[0],BOX.x),clamp(s.goal[1],BOX[h]),clamp(s.goal[2],BOX.z)];
+  s.pos=step(s.pos,s.goal,VMAX);s.ori=step(s.ori,s.ogoal,WMAX)}
+ const ts=Date.now();
+ ws.send(mp({etype:"CAMERA_MOVE",ts,value:{camera:{matrix:HEAD_MATRIX}}}));
+ ws.send(mp({etype:"CONTROLLER_MOVE",ts,value:{left:xrMatrix(S.left.pos,S.left.ori),right:xrMatrix(S.right.pos,S.right.ori),
+  leftState:state("left"),rightState:state("right")}}))}
+setInterval(tick,33);
+// Remember the last pose sent so a reload/reconnect resumes there instead of jumping back to neutral.
+setInterval(()=>{if(live)try{localStorage.setItem("waldoPose",JSON.stringify({t:Date.now(),
+ left:{pos:S.left.pos,ori:S.left.ori},right:{pos:S.right.pos,ori:S.right.ori}}))}catch(e){}},250);
+
+$("conn").onclick=()=>{if(ws){ws.close();return}
+ const url=$("url").value.trim();log("connecting "+url);ws=new WebSocket(url);ws.binaryType="arraybuffer";
+ ws.onopen=()=>{live=true;$("st").textContent="streaming";$("st").className="pill ok";$("conn").textContent="Disconnect";log("connected: streaming neutral pose. Press r in the teleop terminal to start following.")};
+ ws.onclose=e=>{live=false;ws=null;$("st").textContent="disconnected";$("st").className="pill bad";$("conn").textContent="Connect";
+  log(`closed (${e.code}). If it never connected: open ${url.replace("wss","https")} in this browser and accept the certificate.`)};
+ ws.onerror=()=>log("websocket error")};
+$("damp").onclick=()=>{dampUntil=Date.now()+600;log("DAMP: both thumbsticks pressed for 0.6 s")};
+$("certlink").href=$("url").value.replace("wss","https");$("url").oninput=()=>$("certlink").href=$("url").value.replace("wss","https");
+
+const KEYS={w:[0,0.02],s:[0,-0.02],a:[1,0.02],d:[1,-0.02],r:[2,0.02],f:[2,-0.02]};
+document.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"&&e.target.type==="text")return;const k=e.key.toLowerCase();
+ if(k==="escape"){$("damp").click();return}
+ if(k===" "){e.preventDefault();spaceDown=true;return}
+ if(k==="1"||k==="2"){active=k==="1"?"left":"right";$("active").textContent=active;return}
+ if(k==="h"){home("left");home("right");return}
+ if(KEYS[k]){const[i,dv]=KEYS[k];setSlider(active,"xyz"[i],+(S[active].goal[i]+dv).toFixed(3));return}
+ const rot={q:["roll",-10],e:["roll",10],t:["pitch",10],g:["pitch",-10]}[k];
+ if(rot){const cur=+$(`${active}-${rot[0]}`).value;setSlider(active,rot[0],Math.max(-90,Math.min(90,cur+rot[1])))}});
+document.addEventListener("keyup",e=>{if(e.key===" ")spaceDown=false});
+panel("left");panel("right");
+try{const saved=JSON.parse(localStorage.getItem("waldoPose")||"null");
+ if(saved&&Date.now()-saved.t<6*3600e3)for(const h of["left","right"]){
+  S[h].pos=[...saved[h].pos];S[h].ori=[...saved[h].ori];
+  ["x","y","z"].forEach((k,i)=>setSlider(h,k,+saved[h].pos[i].toFixed(3)));
+  ["roll","pitch","yaw"].forEach((k,i)=>setSlider(h,k,+(saved[h].ori[i]*180/Math.PI).toFixed(1)));
+  log("restored last sent pose for "+h+" (Home to return to neutral)")}}catch(e){}
+$("cam-pip").onclick=()=>{const m=$("cam-main"),p=$("cam-pip"),a=m.src;m.src=p.src;p.src=a;
+ $("cam-lbl").textContent=m.src.includes("head_camera")?"head camera (robot's view)":"room webcam"};
+["cam-main","cam-pip"].forEach(id=>$(id).onerror=()=>{$("cam-hint").hidden=false});
+</script></body></html>
