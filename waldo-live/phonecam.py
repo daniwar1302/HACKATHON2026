@@ -103,7 +103,13 @@ class PhoneCam:
         if not body.startswith(b"\xff\xd8") or len(body) > MAX_FRAME:
             return web.Response(status=400, text="expected one JPEG")
         self.jpeg, self.at, self.frames = body, time.monotonic(), self.frames + 1
+        if self.frames == 1 or self.frames % 100 == 0:
+            print(f"phone camera: {self.frames} frames received ({len(body) // 1024} KB)", flush=True)
         return web.Response(text="ok")
+
+    async def status(self, request: web.Request) -> web.Response:
+        age = round(time.monotonic() - self.at, 1) if self.jpeg else None
+        return web.json_response({"frames": self.frames, "last_frame_age_s": age})
 
     async def latest(self, request: web.Request) -> web.Response:
         if self.jpeg is None or time.monotonic() - self.at > STALE_S:
@@ -117,4 +123,5 @@ class PhoneCam:
     def local_app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/frame/phone.jpg", self.latest)
+        app.router.add_get("/status", self.status)
         return app
