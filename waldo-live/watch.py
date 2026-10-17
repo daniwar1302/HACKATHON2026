@@ -112,7 +112,7 @@ async def grab(session, camera: str) -> bytes | None:
         return None
 
 
-async def run(watcher: Watcher) -> None:
+async def run(watcher: Watcher, verbose: bool = False) -> None:
     EVENTS_DIR.mkdir(parents=True, exist_ok=True)
     in_flight = asyncio.Semaphore(watcher.max_in_flight)
     async with aiohttp.ClientSession() as session:
@@ -132,6 +132,9 @@ async def run(watcher: Watcher) -> None:
                 return
             finally:
                 in_flight.release()
+            if verbose:
+                top = {c: f"{max(p, key=p.get)} {max(p.values()):.2f}" for c, p in probs.items()}
+                print(f"{time.strftime('%H:%M:%S')} {latency:.2f}s {top}")
             for event in watcher.apply(frame_t, probs):
                 if event["type"] == "check_failed":
                     snap = EVENTS_DIR / f"{int(frame_t * 1000)}-{event['check']}.jpg"
@@ -197,10 +200,11 @@ if __name__ == "__main__":
     parser.add_argument("--step", default="")
     parser.add_argument("--frames", type=Path)
     parser.add_argument("--labels", type=Path)
+    parser.add_argument("--verbose", action="store_true", help="print every frame's answers and latency")
     args = parser.parse_args()
     task = Task.load(args.task)
     if args.mode == "run":
-        asyncio.run(run(Watcher(task, make_decider(args.decider), fps=args.fps, step=args.step)))
+        asyncio.run(run(Watcher(task, make_decider(args.decider), fps=args.fps, step=args.step), verbose=args.verbose))
     else:
         labels = json.loads(args.labels.read_text()) if args.labels else {}
         asyncio.run(bench(task, make_decider(args.decider), args.frames, args.step or next(iter(task.steps)), labels))
