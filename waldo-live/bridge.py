@@ -23,17 +23,22 @@ import audioop  # removed in Python 3.13; this venv is 3.12
 import base64
 import json
 import os
+import re
 import secrets
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
 from aiohttp import web
 
-from common import BRAIN_URL, BUS_URL, ENV_FILE, apublish, load_env, publish, run_stop_command, subscribe
+from commands import Commands, operator_confirmed
+from common import BRAIN_URL, BUS_URL, CAMERA_URL, ENV_FILE, apublish, load_env, publish, run_stop_command, subscribe
+
+CALL_ME = re.compile(r"\bcall me\b", re.I)
 
 PORT = 8771
 WS_PATH = "/ws/call"
@@ -56,6 +61,20 @@ You called because you need help with a task. Speak in short, natural sentences.
 """
 
 
+COMMAND_INSTRUCTIONS = """You are Waldo, a robot in a robotics lab, on a phone call with your operator, who gives you commands.
+Speak in short, natural sentences.
+
+- You can only do what run_command offers. If asked for something else, say so and list a few options.
+- For a command that moves the robot: say what you will do and ask "go ahead?". Only after the operator
+  says yes, call run_command. If it answers needs_confirmation, ask again and wait for a clear yes.
+- Commands that don't move the robot (like status) run right away.
+- After a command, say the result in one sentence.
+- If the operator says stop, wait, or anything like it, call stop_robot immediately, no confirmation.
+- Messages starting with [camera] or [robot] are live updates; mention them when they matter.
+- When the operator is done, say a short goodbye and call hang_up.
+"""
+
+
 def _fn(name: str, description: str, props: dict | None = None) -> dict:
     props = props or {}
     return {"type": "function", "name": name, "description": description,
@@ -71,6 +90,14 @@ TOOLS = [
     _fn("stop_robot", "Stop the robot immediately. Use whenever the operator says stop or wait."),
     _fn("hang_up", "End the call after saying goodbye."),
 ]
+
+
+def command_tools(menu: list[dict]) -> list[dict]:
+    lines = "; ".join(f"{m['command']} = {m['does']}{' (moves the robot)' if m['moves_robot'] else ''}" for m in menu)
+    run = _fn("run_command", f"Run one robot command. Available: {lines or 'none configured'}.",
+              {"command": {"type": "string", "enum": [m["command"] for m in menu] or ["none"]}})
+    keep = [t for t in TOOLS if t["name"] in ("stop_robot", "hang_up", "robot_status")]
+    return [run, *keep]
 
 
 class AudioConverter:
@@ -138,6 +165,9 @@ class CallSession:
     http: aiohttp.ClientSession
     brief: dict
     call_id: str = ""
+    mode: str = "help"  # help: Waldo needs help with a task; command: operator gives commands
+    transcripts: list = field(default_factory=list)  # (monotonic t, party, text)
+    pending: dict = field(default_factory=dict)  # motion command -> when confirmation was requested
     inbound: AudioConverter | None = None
     outbound: AudioConverter | None = None
     stream_id: str | None = None
@@ -223,6 +253,7 @@ class Bridge:
         self.briefs: dict[str, dict] = {}
         self.active: CallSession | None = None
         self.http: aiohttp.ClientSession | None = None
+        self.commands = Commands.load(builtins={"snapshot": self.snapshot})
 
     # -- placing calls ----------------------------------------------------
 
@@ -293,13 +324,15 @@ class Bridge:
             ctx = json.loads(request.headers.get("X-Call-Context") or "{}")
         except ValueError:
             ctx = {}
-        s = CallSession(inkbox, openai, self.http, brief, call_id=str(ctx.get("call_id") or ctx.get("id") or ""))
+        mode = "command" if brief.get("mode") == "command" else "help"
+        s = CallSession(inkbox, openai, self.http, brief, call_id=str(ctx.get("call_id") or ctx.get("id") or ""), mode=mode)
         self.active = s
-        await apublish(self.http, {"type": "call_started", "call_id": s.call_id})
+        await apublish(self.http, {"type": "call_started", "call_id": s.call_id, "mode": mode})
+        instructions, tools = (COMMAND_INSTRUCTIONS, command_tools(self.commands.menu())) if mode == "command" else (INSTRUCTIONS, TOOLS)
         await s.send_openai({
             "type": "session.update",
             "session": {
-                "type": "realtime", "model": self.model, "instructions": INSTRUCTIONS,
+                "type": "realtime", "model": self.model, "instructions": instructions,
                 "output_modalities": ["audio"],
                 "audio": {
                     "input": {"format": {"type": "audio/pcm", "rate": 24000},
@@ -308,7 +341,7 @@ class Bridge:
                                                  "silence_duration_ms": 500, "create_response": True, "interrupt_response": True}},
                     "output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": self.voice},
                 },
-                "tools": TOOLS, "tool_choice": "auto",
+                "tools": tools, "tool_choice": "auto",
             },
         })
         try:
@@ -325,6 +358,10 @@ class Bridge:
             return
         s.greeted = True
         b = s.brief
+        if s.mode == "command":
+            await s.send_openai(system_item("Call connected. Greet the operator as Waldo and ask what you should do."))
+            await s.respond()
+            return
         await s.send_openai(system_item(
             f"Call connected. Task: {b.get('task') or 'unknown'}. What happened: {b.get('reason')}. "
             f"Greet the operator as Waldo, explain in one or two sentences, then ask: {b.get('question')}"
@@ -396,6 +433,7 @@ class Bridge:
         text = text.strip()
         if not text:
             return
+        s.transcripts.append((time.monotonic(), party, text))
         await s.send_inkbox({"event": "transcript", "party": party, "text": text, "is_final": True})
         await apublish(self.http, {"type": "call_transcript", "party": "operator" if party == "remote" else "waldo", "text": text})
 
@@ -429,16 +467,77 @@ class Bridge:
         if name == "give_instruction":
             await apublish(self.http, {"type": "operator_instruction", "text": args.get("text", ""), "call_id": s.call_id})
             return {"ok": True, "note": "passed to the planner"}
+        if name == "run_command":
+            return await self.run_command(s, args.get("command", ""))
         if name == "stop_robot":
             await apublish(self.http, {"type": "stop_requested", "by": "operator"})
-            err = await run_stop_command()
-            return {"ok": err is None, "note": err or "robot stopped"}
+            s.pending.clear()
+            results = []
+            if self.commands.stop_tool:
+                try:
+                    results.append((await self.commands.stop())["ok"])
+                except Exception as e:
+                    print(f"stop tool failed: {e}")
+                    results.append(False)
+            if os.environ.get("WALDO_STOP_CMD"):
+                results.append(await run_stop_command() is None)
+            if not results:
+                return {"ok": False, "note": "no stop is configured; use the hand controller"}
+            return {"ok": all(results), "note": "robot stopped" if all(results) else "stop may have failed; use the hand controller"}
         if name == "hang_up":
             s.hangup_armed = True
             asyncio.create_task(s.hang_up(delay=10))  # fallback if no goodbye audio follows
             await s.respond("Say a short goodbye.")
             return {"ok": True}
         return {"ok": False, "error": f"unknown tool {name}"}
+
+    async def run_command(self, s: CallSession, name: str) -> dict:
+        cmd = self.commands.commands.get(name)
+        if cmd is None:
+            return {"ok": False, "error": f"unknown command {name!r}", "available": [m["command"] for m in self.commands.menu()]}
+        now = time.monotonic()
+        if cmd.motion:
+            asked = s.pending.get(name)
+            if asked is None or not operator_confirmed(s.transcripts, asked, now):
+                s.pending[name] = now
+                return {"ok": False, "needs_confirmation": True,
+                        "note": f"Ask the operator to confirm '{name}' and wait for a clear yes, then call run_command again."}
+            s.pending.pop(name, None)
+        await apublish(self.http, {"type": "command_started", "command": name, "call_id": s.call_id})
+        try:
+            result = await self.commands.run(name)
+        except Exception as e:
+            result = {"ok": False, "error": str(e)}
+        await apublish(self.http, {"type": "command_done", "command": name, "ok": result.get("ok"), "call_id": s.call_id})
+        return result
+
+    async def snapshot(self) -> dict:
+        try:
+            async with self.http.get(f"{CAMERA_URL}/frame/waldo_webcam.jpg", timeout=3) as resp:
+                jpeg = await resp.read()
+            upload = await asyncio.to_thread(self.identity.upload_imessage_media, content=jpeg, filename="waldo.jpg", content_type="image/jpeg")
+            await asyncio.to_thread(self.identity.send_imessage, to=self.operator, text="Room camera, just now", media_urls=[upload.media_url])
+            return {"ok": True, "note": "photo sent by iMessage"}
+        except Exception as e:
+            return {"ok": False, "error": f"couldn't send the photo: {e}"}
+
+    async def imessage_loop(self, poll_s: float = 3.0) -> None:
+        """Text Waldo "call me" over iMessage and it calls you back in command mode."""
+        started, seen = datetime.now(timezone.utc), set()
+        operator = re.sub(r"\D", "", self.operator)
+        while True:
+            try:
+                msgs = await asyncio.to_thread(self.identity.list_imessages, limit=10)
+                for m in msgs:
+                    if (m.id in seen or m.direction != "inbound" or m.created_at <= started
+                            or re.sub(r"\D", "", m.remote_number or "") != operator):
+                        continue
+                    seen.add(m.id)
+                    if CALL_ME.search(m.content or "") and self.active is None:
+                        await apublish(self.http, {"type": "call_requested", "mode": "command", "reason": "operator asked by text"})
+            except Exception as e:
+                print(f"imessage poll: {e}")
+            await asyncio.sleep(poll_s)
 
 
 def open_tunnel(client, handle: str):
@@ -471,7 +570,11 @@ async def serve() -> None:
         await runner.setup()
         await web.TCPSite(runner, "127.0.0.1", PORT).start()
         print(f"bridge ready: wss://{listener.tunnel.public_host}{WS_PATH} -> 127.0.0.1:{PORT}")
-        await bridge.bus_loop()
+        print(f"command menu: {[m['command'] for m in bridge.commands.menu()]}; text 'call me' to Waldo's iMessage to get a call")
+        try:
+            await asyncio.gather(bridge.bus_loop(), bridge.imessage_loop())
+        finally:
+            await bridge.commands.close()
 
 
 def setup_signing_key() -> None:
@@ -494,15 +597,16 @@ if __name__ == "__main__":
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve")
     sub.add_parser("setup-signing-key")
-    c = sub.add_parser("call")
-    c.add_argument("reason")
-    c.add_argument("question")
+    c = sub.add_parser("call", help='help mode: call "reason" "question"; command mode: call --mode command')
+    c.add_argument("reason", nargs="?", default="operator asked for a call")
+    c.add_argument("question", nargs="?", default="")
     c.add_argument("--task", default="")
+    c.add_argument("--mode", choices=["help", "command"], default="help")
     args = parser.parse_args()
     if args.cmd == "serve":
         asyncio.run(serve())
     elif args.cmd == "setup-signing-key":
         setup_signing_key()
     else:
-        ok = publish({"type": "call_requested", "reason": args.reason, "question": args.question, "task": args.task})
+        ok = publish({"type": "call_requested", "reason": args.reason, "question": args.question, "task": args.task, "mode": args.mode})
         print("call requested" if ok else "bus not running (python bus.py)")

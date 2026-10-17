@@ -9,6 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer
 import bridge
 import brain as brain_mod
 from bus import Bus, make_app
+from commands import Commands
 from deciders import Check, JevDecider
 from watch import Debounce, Task, Watcher
 
@@ -138,10 +139,117 @@ async def test_tool_stop_robot_publishes_and_runs_stop_cmd(monkeypatch):
 
     monkeypatch.setattr(bridge, "apublish", fake_publish)
     monkeypatch.setattr(bridge, "run_stop_command", fake_stop)
+    monkeypatch.setenv("WALDO_STOP_CMD", "true")
     b = bridge.Bridge.__new__(bridge.Bridge)
-    b.http = None
+    b.http, b.commands = None, Commands({})
     out = await b._run_tool(session(), "stop_robot", {})
     assert out["ok"] and published == [{"type": "stop_requested", "by": "operator"}]
+
+
+async def test_stop_robot_without_any_stop_configured_says_so(monkeypatch):
+    async def fake_publish(http, event, bus=None):
+        return True
+
+    monkeypatch.setattr(bridge, "apublish", fake_publish)
+    monkeypatch.delenv("WALDO_STOP_CMD", raising=False)
+    b = bridge.Bridge.__new__(bridge.Bridge)
+    b.http, b.commands = None, Commands({})
+    out = await b._run_tool(session(), "stop_robot", {})
+    assert not out["ok"] and "hand controller" in out["note"]
+
+
+# -- command mode ------------------------------------------------------------
+
+CONFIG = {"stop": "g1__stop", "commands": {
+    "status": {"description": "state", "tool": "g1__get_state", "enabled": True},
+    "wave": {"description": "wave", "tool": "g1__gesture", "args": {"name": "high wave"}, "motion": True, "enabled": True},
+    "clap": {"description": "clap", "tool": "g1__gesture", "motion": True, "enabled": False},
+}}
+
+
+class FakeCommands(Commands):
+    def __init__(self):
+        super().__init__(CONFIG)
+        self.calls = []
+
+    async def call_tool(self, qualified, args):
+        self.calls.append((qualified, args))
+        return {"ok": True, "result": "done"}
+
+
+def command_bridge(monkeypatch):
+    async def fake_publish(http, event, bus=None):
+        return True
+
+    monkeypatch.setattr(bridge, "apublish", fake_publish)
+    b = bridge.Bridge.__new__(bridge.Bridge)
+    b.http, b.commands = None, FakeCommands()
+    return b
+
+
+def test_menu_offers_only_enabled_commands():
+    tools = bridge.command_tools(Commands(CONFIG).menu())
+    run = next(t for t in tools if t["name"] == "run_command")
+    assert run["parameters"]["properties"]["command"]["enum"] == ["status", "wave"]
+    assert {t["name"] for t in tools} == {"run_command", "stop_robot", "hang_up", "robot_status"}
+
+
+async def test_no_motion_command_runs_immediately(monkeypatch):
+    b = command_bridge(monkeypatch)
+    assert (await b.run_command(session(), "status"))["ok"]
+    assert b.commands.calls == [("g1__get_state", {})]
+
+
+async def test_motion_needs_the_operator_to_say_yes_on_the_call(monkeypatch):
+    b, s = command_bridge(monkeypatch), session()
+    first = await b.run_command(s, "wave")
+    assert first["needs_confirmation"] and b.commands.calls == []
+    second = await b.run_command(s, "wave")  # the model calling again without a yes doesn't count
+    assert second["needs_confirmation"] and b.commands.calls == []
+    s.transcripts.append((time.monotonic() + 0.01, "local", "Wave, go ahead?"))  # Waldo saying it doesn't count either
+    assert (await b.run_command(s, "wave"))["needs_confirmation"]
+    s.transcripts.append((time.monotonic() + 0.01, "remote", "yeah go ahead"))
+    assert (await b.run_command(s, "wave"))["ok"]
+    assert b.commands.calls == [("g1__gesture", {"name": "high wave"})]
+    assert (await b.run_command(s, "wave"))["needs_confirmation"]  # each motion needs its own yes
+
+
+async def test_disabled_or_unknown_command_is_refused(monkeypatch):
+    b = command_bridge(monkeypatch)
+    out = await b.run_command(session(), "clap")
+    assert not out["ok"] and out["available"] == ["status", "wave"]
+
+
+def test_operator_confirmed_window():
+    from commands import CONFIRM_WINDOW_S, operator_confirmed
+
+    said = [(10.0, "remote", "yes please")]
+    assert operator_confirmed(said, since=5.0, now=11.0)
+    assert not operator_confirmed(said, since=10.5, now=11.0)  # said before the question
+    assert not operator_confirmed(said, since=5.0, now=5.0 + CONFIRM_WINDOW_S + 1)
+    assert not operator_confirmed([(10.0, "remote", "no, wait")], since=5.0, now=11.0)
+
+
+async def test_text_call_me_requests_a_command_call(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    published = []
+
+    async def fake_publish(http, event, bus=None):
+        published.append(event)
+        return True
+
+    monkeypatch.setattr(bridge, "apublish", fake_publish)
+    later = datetime.now(timezone.utc) + timedelta(seconds=5)
+    msgs = [SimpleNamespace(id=1, direction="inbound", created_at=later, remote_number="+1 (650) 452-3443", content="Waldo call me"),
+            SimpleNamespace(id=2, direction="inbound", created_at=later, remote_number="+15550000000", content="call me")]
+    b = bridge.Bridge.__new__(bridge.Bridge)
+    b.http, b.active, b.operator = None, None, "+16504523443"
+    b.identity = SimpleNamespace(list_imessages=lambda limit: msgs)
+    task = asyncio.create_task(b.imessage_loop(poll_s=0.01))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    assert published == [{"type": "call_requested", "mode": "command", "reason": "operator asked by text"}]  # once, operator only
 
 
 def test_authorized_requires_token_and_signature(monkeypatch):
