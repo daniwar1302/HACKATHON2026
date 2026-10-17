@@ -22,7 +22,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from channels import Channel, Sent, make_channel
+from channels import Channel, ChannelError, Sent, make_channel
 from hints import HintStore
 
 HOME = Path(os.environ.get("WALDO_ASK_HOME", Path.home() / ".waldo-ask"))
@@ -101,7 +101,11 @@ class Asker:
             return {"status": "error", "error": f"no open question {ask_id!r}", "open": sorted(self.pending)}
         deadline = time.monotonic() + max(0.0, min(MAX_WAIT, wait_seconds))
         while True:
-            replies = await asyncio.to_thread(self.channel.replies, pending.sent)
+            try:
+                replies = await asyncio.to_thread(self.channel.replies, pending.sent)
+            except ChannelError as e:
+                del self.pending[ask_id]
+                return {"status": "unreachable", "error": str(e), "next": "Keep the robot stopped. Ask again later or give up the task."}
             if replies:
                 del self.pending[ask_id]
                 answer = "\n".join(replies).strip()
@@ -147,9 +151,10 @@ def build_instructions(store: HintStore) -> str:
 
 
 def _channel_factory():
-    if not TO:
-        raise RuntimeError("WALDO_ASK_TO is not set (operator email or +E.164 phone number)")
-    return make_channel(CHANNEL, AGENT, TO)
+    to = os.environ.get("WALDO_OPERATOR_PHONE", "") if CHANNEL in ("call", "imessage", "sms") and not TO else TO
+    if not to:
+        raise RuntimeError("WALDO_ASK_TO (or WALDO_OPERATOR_PHONE for call/imessage/sms) is not set")
+    return make_channel(CHANNEL, AGENT, to)
 
 
 store = HintStore(HOME / "hints.json")

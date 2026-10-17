@@ -1,0 +1,30 @@
+{
+  "task": "lift the red cup",
+  "camera": "waldo_webcam",
+  "steps": {
+    "approach": [
+      {"id": "progress", "question": "Is the robot gripper moving toward the red cup?",
+       "answers": {"yes": "the gripper is near or heading to the red cup", "no": "the gripper is away from the cup or not moving toward it"},
+       "bad": "no"},
+      {"id": "person", "question": "Is a person's hand or body within reach of the robot arm?",
+       "answers": {"yes": "a hand, arm or body is close enough for the robot arm to touch", "no": "no person near the arm"},
+       "bad": "yes", "severity": "critical"}
+    ],
+    "grasp": [
+      {"id": "grip", "question": "How is the red cup held by the robot gripper?",
+       "answers": {"secure": "the cup is firmly between the gripper fingers", "slipping": "the cup is tilting or sliding out of the fingers", "missed": "the gripper closed but the cup is not between the fingers"},
+       "bad": ["slipping", "missed"]},
+      {"id": "person", "question": "Is a person's hand or body within reach of the robot arm?",
+       "answers": {"yes": "a hand, arm or body is close enough for the robot arm to touch", "no": "no person near the arm"},
+       "bad": "yes", "severity": "critical"}
+    ],
+    "lift": [
+      {"id": "lifted", "question": "Where is the red cup?",
+       "answers": {"held": "off the table and still in the gripper", "falling": "dropping or tipping out of the gripper", "on_table": "still on the table or knocked over"},
+       "bad": ["falling", "on_table"]},
+      {"id": "person", "question": "Is a person's hand or body within reach of the robot arm?",
+       "answers": {"yes": "a hand, arm or body is close enough for the robot arm to touch", "no": "no person near the arm"},
+       "bad": "yes", "severity": "critical"}
+    ]
+  }
+}

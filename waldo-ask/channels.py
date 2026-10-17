@@ -144,11 +144,67 @@ class SmsChannel:
         return list(reversed(found))
 
 
+class ChannelError(RuntimeError):
+    """The operator could not be reached (call not answered, failed, etc.)."""
+
+
+CALL_DONE = {"completed", "ended", "failed", "no_answer", "busy", "canceled", "cancelled"}
+
+
+class CallChannel:
+    """Phone call through Inkbox's hosted voice agent, over the shared iMessage line.
+
+    The voice agent is briefed with the question; the answer is what the operator
+    said, read from the transcript once the call ends. The photo goes by iMessage.
+    """
+    name = "call"
+
+    def __init__(self, identity, calls, to: str):
+        self.identity, self.calls, self.to = identity, calls, to
+
+    def send(self, code, subject, body, image):
+        from inkbox import CallOrigin
+        from inkbox.phone.types import CallMode
+
+        if image:
+            try:
+                upload = self.identity.upload_imessage_media(content=image, filename="waldo.jpg", content_type="image/jpeg")
+                self.identity.send_imessage(to=self.to, text=f"Photo for my call ({code})", media_urls=[upload.media_url])
+            except Exception:
+                pass  # the call matters more than the photo
+        call = self.identity.place_call(
+            to_number=self.to,
+            origination=CallOrigin.SHARED_IMESSAGE_NUMBER,
+            mode=CallMode.HOSTED_AGENT,
+            hosted_agent_authority_mode="contact_scoped",
+            on_voicemail="hang_up",
+            reason=(
+                "You are Waldo, a robot in a robotics lab, calling your operator because you need help. "
+                f"Explain briefly, then ask the question and listen to the answer.\n\n{body}\n\n"
+                "If the answer is unclear, ask one short follow-up. Repeat the instruction back, thank them, "
+                "and hang up. Do not promise anything or take any other action."
+            ),
+        )
+        return Sent(self.name, code, call.created_at, str(call.id))
+
+    def replies(self, sent):
+        status = str(self.calls.get(sent.ref).status).split(".")[-1].lower()
+        if status not in CALL_DONE:
+            return []
+        said = [s.text for s in self.identity.list_transcripts(sent.ref) if str(s.party).endswith("remote") and s.text]
+        if not said:
+            raise ChannelError(f"call {status} without an answer")
+        return [" ".join(said)]
+
+
 def make_channel(kind: str, agent_handle: str, to: str) -> Channel:
     from inkbox import Inkbox
 
-    identity = Inkbox().get_identity(agent_handle)  # key from INKBOX_API_KEY or ~/.inkbox/config
+    client = Inkbox()  # key from INKBOX_API_KEY or ~/.inkbox/config
+    identity = client.get_identity(agent_handle)
+    if kind == "call":
+        return CallChannel(identity, client.calls, to)
     channels = {"email": EmailChannel, "imessage": IMessageChannel, "sms": SmsChannel}
     if kind not in channels:
-        raise ValueError(f"WALDO_ASK_CHANNEL must be one of {sorted(channels)}")
+        raise ValueError(f"WALDO_ASK_CHANNEL must be one of {sorted([*channels, 'call'])}")
     return channels[kind](identity, to)

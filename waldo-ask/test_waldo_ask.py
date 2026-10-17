@@ -115,6 +115,48 @@ class _Identity:
         return next(m for m in self.msgs if str(m.id) == id)
 
 
+class _Seg:
+    def __init__(self, party, text):
+        self.party, self.text = party, text
+
+
+class _CallIdentity:
+    def __init__(self, segs):
+        self.segs = segs
+
+    def list_transcripts(self, call_id):
+        return self.segs
+
+
+class _Calls:
+    def __init__(self, status):
+        self.status = status
+
+    def get(self, call_id):
+        return type("Call", (), {"status": self.status})()
+
+
+def test_call_answer_is_what_the_operator_said():
+    from channels import CallChannel
+
+    segs = [_Seg("local", "Handle or rim?"), _Seg("remote", "Yes"), _Seg("remote", "By the rim")]
+    sent = Sent("call", "AB12", datetime.now(timezone.utc), "call-1")
+    assert CallChannel(_CallIdentity(segs), _Calls("answered"), "+1").replies(sent) == []
+    assert CallChannel(_CallIdentity(segs), _Calls("completed"), "+1").replies(sent) == ["Yes By the rim"]
+
+
+def test_unanswered_call_is_unreachable(tmp_path):
+    from channels import ChannelError
+
+    class NoAnswer(FakeChannel):
+        def replies(self, sent):
+            raise ChannelError("call no_answer without an answer")
+
+    store = HintStore(tmp_path / "hints.json")
+    asker = Asker(store, lambda: NoAnswer(), camera_url=None, poll=0.01)
+    assert ask(asker)["status"] == "unreachable"
+
+
 def test_email_replies_only_from_operator_after_question():
     t0 = datetime(2026, 10, 17, 13, tzinfo=timezone.utc)
     msgs = [
