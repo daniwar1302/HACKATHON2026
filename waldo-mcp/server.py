@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import time
+import urllib.error
 import urllib.request
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -126,8 +127,11 @@ def look(camera: str = "head_camera") -> Image:
     """One JPEG frame from a camera: 'head_camera' (robot's view) or 'waldo_webcam' (room)."""
     if camera not in CAMERAS:
         raise ValueError(f"camera must be one of {CAMERAS}")
-    with urllib.request.urlopen(f"{CAMERA_URL}/frame/{camera}.jpg", timeout=5) as resp:
-        return Image(data=resp.read(), format="jpeg")
+    try:
+        with urllib.request.urlopen(f"{CAMERA_URL}/frame/{camera}.jpg", timeout=5) as resp:
+            return Image(data=resp.read(), format="jpeg")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"{camera} has no current frame (HTTP {e.code}); try the other camera") from e
 
 
 @mcp.tool()
