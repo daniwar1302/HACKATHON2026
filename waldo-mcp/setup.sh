@@ -3,4 +3,4 @@
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ~/.local/bin/uv venv --python /home/waldo/miniconda3/envs/tv/bin/python --system-site-packages "$DIR/.venv"
-~/.local/bin/uv pip install --python "$DIR/.venv/bin/python" "mcp>=1.2"
+~/.local/bin/uv pip install --python "$DIR/.venv/bin/python" "mcp>=1.2,<2"
