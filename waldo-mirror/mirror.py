@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import signal
 import threading
 import time
@@ -86,7 +87,19 @@ def main() -> None:
     p.add_argument("--iface", default="enp5s0")
     p.add_argument("--fps", type=float, default=10.0)
     p.add_argument("--debug-dir", type=Path, help="save one annotated frame per second here")
+    p.add_argument("--log", type=Path, help="also append status lines to this file")
     args = p.parse_args()
+    log_file = args.log.open("a", buffering=1) if args.log else None
+
+    def say(line: str) -> None:
+        """Print without ever crashing: a broken stdout must not stop the arms from being released."""
+        for out in (sys.stdout, log_file):
+            if out:
+                try:
+                    out.write(line + "\n")
+                    out.flush()
+                except Exception:
+                    pass
     if args.debug_dir:
         args.debug_dir.mkdir(parents=True, exist_ok=True)
     if not 0.2 <= args.max_vel <= 3.0:
@@ -98,11 +111,13 @@ def main() -> None:
     from robot import ArmIK, ArmSdk, fsm_id
 
     stop = threading.Event()
+    # Ctrl-C and SIGTERM both just ask the loop to stop, so the arms are always released properly.
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
     threading.Thread(target=watch_bus, args=(stop,), daemon=True).start()
 
     ik = ArmIK()
-    print(f"robot reach L/R {ik.reach['left']:.2f}/{ik.reach['right']:.2f} m; mode {'copy' if args.copy else 'mirror'}; "
+    say(f"robot reach L/R {ik.reach['left']:.2f}/{ik.reach['right']:.2f} m; mode {'copy' if args.copy else 'mirror'}; "
           f"{'LIVE' if args.live else 'DRY RUN (nothing sent to the robot)'}")
 
     arms = None
@@ -111,15 +126,15 @@ def main() -> None:
         state = fsm_id(args.iface)
         if state not in (200, 500):
             raise SystemExit(f"robot is not balancing (FSM {state}); stand it up first. Nothing sent.")
-        print("LIVE: robot on the gantry, spotter holding the controller (L1+A), nobody within reach. Starting in 5 s, Ctrl-C to abort.")
+        say("LIVE: robot on the gantry, spotter holding the controller (L1+A), nobody within reach. Starting in 5 s, Ctrl-C to abort.")
         for n in range(5, 0, -1):
             if stop.wait(1):
                 return
-            print(f"  {n}...")
+            say(f"  {n}...")
         arms = ArmSdk(args.iface, max_vel=args.max_vel)
         arms.engage()
         q = arms.measured()
-        print("arms engaged")
+        say("arms engaged")
 
     landmarker = vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=str(MODEL)), running_mode=vision.RunningMode.VIDEO, num_poses=1))
@@ -167,7 +182,7 @@ def main() -> None:
                 last_print = time.monotonic()
                 deg = np.degrees(q).round().astype(int)
                 cm = {s: (hands[s] * 100).round().astype(int) for s in hands}
-                print(f"{status:>22} | robot L hand fwd/left/up {cm['left'][0]:+4d} {cm['left'][1]:+4d} {cm['left'][2]:+4d} cm "
+                say(f"{status:>22} | robot L hand fwd/left/up {cm['left'][0]:+4d} {cm['left'][1]:+4d} {cm['left'][2]:+4d} cm "
                       f"(sh p/r/y {deg[0]:+4d} {deg[1]:+4d} {deg[2]:+4d} elbow {deg[3]:+4d}) | "
                       f"R hand {cm['right'][0]:+4d} {cm['right'][1]:+4d} {cm['right'][2]:+4d} cm "
                       f"(sh p/r/y {deg[7]:+4d} {deg[8]:+4d} {deg[9]:+4d} elbow {deg[10]:+4d})")
@@ -188,9 +203,11 @@ def main() -> None:
     finally:
         landmarker.close()
         if arms:
-            print("releasing arms: back to start, then handing back to the stock controller")
+            say("releasing arms: back to start, then handing back to the stock controller")
             arms.release()
-            print("released")
+            say("released")
+        if log_file:
+            log_file.close()
 
 
 if __name__ == "__main__":

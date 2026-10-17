@@ -25,6 +25,24 @@ WAIST_YAW = 12
 WEIGHT_SLOT = 29                   # arm_sdk weight: 1 = our commands, 0 = stock controller
 LIMIT_MARGIN = 0.10                # rad kept away from each joint's hard limit
 
+# Comfortable ranges for mirroring, per arm joint (degrees): shoulder pitch, roll, yaw, elbow,
+# wrist roll, pitch, yaw. Tighter than the hardware limits so the IK can never choose a contorted
+# pose (arm swung far back, twisted upper arm, hyperextended elbow). Roll is outward-positive on
+# the left arm and outward-negative on the right.
+_LEFT = [(-160, 40), (-10, 110), (-60, 60), (-5, 115), (-40, 40), (-40, 40), (-40, 40)]
+_RIGHT = [(-160, 40), (-110, 10), (-60, 60), (-5, 115), (-40, 40), (-40, 40), (-40, 40)]
+COMFORT_LOWER = np.radians([lo for lo, _ in _LEFT + _RIGHT])
+COMFORT_UPPER = np.radians([hi for _, hi in _LEFT + _RIGHT])
+# Where the G1's own controller rests the arms (measured on Waldo): the "natural" posture the IK prefers.
+NATURAL = np.radians([16, 12, 0, 56, 0, 0, 0, 16, -12, 0, 56, 0, 0, 0])
+
+
+class _NoFilter:
+    """Stands in for the IK's internal moving-average filter: we smooth targets and cap speed ourselves."""
+
+    def add_data(self, q):
+        self.filtered_data = np.asarray(q)
+
 
 class ArmIK:
     def __init__(self):
@@ -39,6 +57,7 @@ class ArmIK:
             self.ik = G1_29_ArmIK(Unit_Test=False, Visualization=False)
         finally:
             os.chdir(cwd)
+        self.ik.smooth_filter = _NoFilter()
         model = self.ik.reduced_robot.model
         data = model.createData()
         q0 = np.zeros(model.nq)
@@ -50,23 +69,34 @@ class ArmIK:
         elbow = {s: data.oMi[model.getJointId(f"{s}_elbow_joint")].translation for s in ("left", "right")}
         self.reach = {s: float(np.linalg.norm(elbow[s] - self.shoulder[s]) + np.linalg.norm(ee[s].translation - elbow[s]))
                       for s in ("left", "right")}
-        self.lower = model.lowerPositionLimit + LIMIT_MARGIN
-        self.upper = model.upperPositionLimit - LIMIT_MARGIN
+        self.lower = np.maximum(model.lowerPositionLimit + LIMIT_MARGIN, COMFORT_LOWER)
+        self.upper = np.minimum(model.upperPositionLimit - LIMIT_MARGIN, COMFORT_UPPER)
 
     def solve(self, left: np.ndarray, right: np.ndarray, current_q: np.ndarray) -> np.ndarray:
         """14 arm joint angles that put the hands at `left` / `right` (waist frame), within limits.
 
         Only the hand position matters: each target keeps the hand's current orientation, so the
-        solver never twists the shoulder to hold a wrist angle the person didn't ask for.
+        solver never twists the shoulder to hold a wrist angle the person didn't ask for. It solves
+        from the current pose and from the natural one, and keeps the more natural answer among
+        those that reach the targets, so a run of frames can't drift into a contorted pose.
         """
-        rotation = self.hand_rotations(current_q)
-        tf = {}
-        for side, p in (("left", left), ("right", right)):
-            m = np.eye(4)
-            m[:3, :3], m[:3, 3] = rotation[side], p
-            tf[side] = m
-        q, _ = self.ik.solve_ik(tf["left"], tf["right"], current_q)
-        return np.clip(q, self.lower, self.upper)
+        targets = {"left": left, "right": right}
+        best, best_score = None, None
+        for seed in (current_q, NATURAL):
+            rotation = self.hand_rotations(seed)
+            tf = {}
+            for side, p in targets.items():
+                m = np.eye(4)
+                m[:3, :3], m[:3, 3] = rotation[side], p
+                tf[side] = m
+            q, _ = self.ik.solve_ik(tf["left"], tf["right"], seed)
+            q = np.clip(q, self.lower, self.upper)
+            hands = self.hand_positions(q)
+            miss = sum(np.linalg.norm(hands[s] - targets[s]) for s in targets)
+            score = 10.0 * miss + 0.1 * np.linalg.norm(q - NATURAL)
+            if best_score is None or score < best_score:
+                best, best_score = q, score
+        return best
 
     def _hands(self, q: np.ndarray):
         import pinocchio as pin

@@ -10,7 +10,7 @@ LOG=/tmp/mirror_live.log
 frame_age() {
   curl -s http://127.0.0.1:8773/status | python3 -c 'import json,sys; a=json.load(sys.stdin)["last_frame_age_s"]; print(a if a is not None else 999)' 2>/dev/null || echo 999
 }
-running() { tmux list-windows -t waldo -F '#{window_name}' 2>/dev/null | grep -qx mirror; }
+running() { pgrep -f "/waldo-mirror/.venv/bin/python mirror.py" >/dev/null; }
 
 case "${1:-}" in
   check)
@@ -38,15 +38,22 @@ EOF
       sleep 1
     done
     : > $LOG
-    tmux new-window -d -t waldo -n mirror "$DIR/run.sh --live --max-vel 0.8 2>&1 | grep --line-buffered -vE 'W0000|I0000|WARNING: Logging|inference_feedback|XNNPACK|ERROR in convergence' | tee $LOG; echo; read -p '[mirror exited - Enter closes this window] ' x"
+    # No pipes: Ctrl-C in the window (or `live.sh stop`) reaches only the mirror, which then releases the arms.
+    tmux new-window -d -t waldo -n mirror "$DIR/run.sh --live --max-vel 0.8 --log $LOG 2>/tmp/mirror_stderr.log; echo; read -p '[mirror exited - Enter closes this window] ' x"
     sleep 12
     tail -5 $LOG
     ;;
   stop)
     running || { echo "mirror not running"; exit 0; }
-    tmux send-keys -t waldo:mirror C-c
+    pkill -INT -f "/waldo-mirror/.venv/bin/python mirror.py"
     for i in $(seq 1 20); do grep -q "^released" $LOG && break; sleep 1; done
-    tail -3 $LOG
+    if grep -q "^released" $LOG; then
+      tmux send-keys -t waldo:mirror Enter 2>/dev/null
+      tail -2 $LOG
+    else
+      echo "WARNING: no release confirmed in 20 s; use the hand controller if the arms are not back"
+      tail -3 $LOG
+    fi
     ;;
   *)
     echo "usage: live.sh check|start|stop"; exit 2 ;;
