@@ -99,12 +99,13 @@ In tmux: click a pane to focus it, **Ctrl-b then d** to leave everything running
 | Event bus, start/stop scripts | ✅ Running on Waldo |
 | Call bridge | ✅ Built, tested with fakes; Inkbox tunnel `waldo-agent.inkboxwire.com` active, signing key set |
 | Phone calls | ✅ Test call to the operator worked (Inkbox shared iMessage line, transcript read back) |
+| **Phone commands (MVP)** | ✅ **Text "call me" → Waldo calls → "wave" → "Go ahead?" → "Yes" → the G1 waves** (~1 s from yes to motion) |
 | Brain | ✅ Built, tested with a fake model; runs on Waldo |
 | Tests | ✅ 12 (`waldo-ask`) + 14 (`waldo-live`) passing on Waldo |
 
 **Still needed:**
 
-- [ ] OpenAI credits ($10–20) for the phone voice. The key works; the account is at $0
+- [x] OpenAI credits for the phone voice
 - [ ] Anthropic API key with credits ($10–20) for the brain
 - [ ] From the bay owner: the `widowx` MCP server command, a safe arm-stop command, and an OK to use the robot
 - [ ] Recorded clips of good and failed grasps ([guide](docs/recording-guide.md)) to tune the watcher
