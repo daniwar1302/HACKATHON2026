@@ -41,12 +41,14 @@ PAGE = """<!doctype html>
 <p id="status">Not sending.</p>
 <script>
 const url = "frame" + location.search, v = document.getElementById("v"), st = document.getElementById("status");
-const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 480;
+const canvas = document.createElement("canvas");
 let sent = 0, running = false, lock = null;
 function say(text, cls) { st.textContent = text; st.className = cls || ""; }
 async function loop() {
   while (running) {
     const t = Date.now();
+    const scale = 640 / Math.max(v.videoWidth, v.videoHeight, 1);  // longest side 640 px, aspect kept
+    canvas.width = Math.round(v.videoWidth * scale); canvas.height = Math.round(v.videoHeight * scale);
     canvas.getContext("2d").drawImage(v, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.7));
     try {
