@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import audioop  # removed in Python 3.13; this venv is 3.12
 import base64
+import collections
 import json
 import os
 import re
@@ -168,6 +169,8 @@ class CallSession:
     mode: str = "help"  # help: Waldo needs help with a task; command: operator gives commands
     transcripts: list = field(default_factory=list)  # (monotonic t, party, text)
     pending: dict = field(default_factory=dict)  # motion command -> when confirmation was requested
+    end_reason: str = ""
+    stats: collections.Counter = field(default_factory=collections.Counter)
     inbound: AudioConverter | None = None
     outbound: AudioConverter | None = None
     stream_id: str | None = None
@@ -337,8 +340,10 @@ class Bridge:
                 "audio": {
                     "input": {"format": {"type": "audio/pcm", "rate": 24000},
                               "transcription": {"model": "gpt-4o-mini-transcribe"},
-                              "turn_detection": {"type": "server_vad", "threshold": 0.5, "prefix_padding_ms": 300,
-                                                 "silence_duration_ms": 500, "create_response": True, "interrupt_response": True}},
+                              # A bit less sensitive than the default so line echo of Waldo's own voice
+                              # doesn't count as the operator interrupting.
+                              "turn_detection": {"type": "server_vad", "threshold": 0.65, "prefix_padding_ms": 300,
+                                                 "silence_duration_ms": 600, "create_response": True, "interrupt_response": True}},
                     "output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": self.voice},
                 },
                 "tools": tools, "tool_choice": "auto",
@@ -346,11 +351,16 @@ class Bridge:
         })
         try:
             await asyncio.gather(self._from_inkbox(s), self._from_openai(s))
+        except Exception as e:
+            s.end_reason = f"bridge error: {type(e).__name__}: {e}"
+            import traceback
+            traceback.print_exc()
         finally:
             s.closed = True
             self.active = None
             await openai.close()
-            await apublish(self.http, {"type": "call_ended", "call_id": s.call_id})
+            print(f"call ended: {s.end_reason} | stats {dict(s.stats)}")
+            await apublish(self.http, {"type": "call_ended", "call_id": s.call_id, "reason": s.end_reason, "stats": dict(s.stats)})
         return inkbox
 
     async def _greet(self, s: CallSession) -> None:
@@ -369,36 +379,51 @@ class Bridge:
         await s.respond()
 
     async def _from_inkbox(self, s: CallSession) -> None:
+        why = "inkbox socket ended"
         async for msg in s.inkbox:
-            if msg.type != aiohttp.WSMsgType.TEXT:
+            if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                why = f"inkbox socket {msg.type.name}"
                 break
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue  # ignore anything that isn't a JSON frame
             frame = json.loads(msg.data)
             event = (frame.get("event") or "").lower()
             if event == "start":
                 start = frame.get("start") or {}
                 s.stream_id = frame.get("stream_id") or start.get("stream_id")
-                s.inbound, s.outbound = call_audio(start.get("media_format") or frame.get("media_format"))
+                fmt = start.get("media_format") or frame.get("media_format")
+                print(f"call start: media_format={fmt} stream_id={s.stream_id}")
+                s.inbound, s.outbound = call_audio(fmt)
                 await self._greet(s)
             elif event == "media":
                 if s.inbound is None:
+                    print("call media before start: assuming 8 kHz mu-law")
                     s.inbound, s.outbound = call_audio(None)
                 await self._greet(s)
                 payload = (frame.get("media") or {}).get("payload")
                 if payload and (converted := s.inbound.convert(payload)):
+                    s.stats["in_frames"] += 1
                     await s.send_openai({"type": "input_audio_buffer.append", "audio": converted})
             elif event in ("stop", "closed", "hangup"):
+                why = f"inkbox sent {event} ({frame.get('reason') or 'no reason'})"
                 break
+        s.end_reason = s.end_reason or why
         s.closed = True
         await s.openai.close()
 
     async def _from_openai(self, s: CallSession) -> None:
+        why = "openai socket ended"
         async for msg in s.openai:
-            if msg.type != aiohttp.WSMsgType.TEXT:
+            if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                why = f"openai socket {msg.type.name} {s.openai.close_code}"
                 break
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
             frame = json.loads(msg.data)
             t = frame.get("type", "")
             if t in ("response.output_audio.delta", "response.audio.delta"):
                 if s.outbound and (converted := s.outbound.convert(frame.get("delta") or "")):
+                    s.stats["out_frames"] += 1
                     await s.send_inkbox({"event": "media", "media": {"payload": converted, "track": "outbound"}})
             elif t in ("response.output_audio.done", "response.audio.done"):
                 s.outbound and s.outbound.reset()
@@ -406,8 +431,11 @@ class Bridge:
                 if s.hangup_armed:
                     asyncio.create_task(s.hang_up())
             elif t == "input_audio_buffer.speech_started":
+                # Server VAD already cancels the response; we only drop audio still queued on the call.
                 s.hangup_armed = False  # operator barged in during the goodbye
-                await s.interrupt()
+                s.stats["barge_ins"] += 1
+                await s.send_inkbox({"event": "clear"})
+                s.outbound and s.outbound.reset()
             elif t == "response.created":
                 s.response_active = True
             elif t == "response.done":
@@ -426,6 +454,7 @@ class Bridge:
                     asyncio.create_task(self._tool(s, item["name"], item["call_id"], item.get("arguments") or "{}"))
             elif t == "error":
                 print(f"realtime error: {frame.get('error')}")
+        s.end_reason = s.end_reason or why
         s.closed = True
         await s.inkbox.close()
 
