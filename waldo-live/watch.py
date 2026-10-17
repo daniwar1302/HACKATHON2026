@@ -20,7 +20,7 @@ from pathlib import Path
 
 import aiohttp
 
-from common import BUS_URL, CAMERA_URL, apublish, load_env, run_stop_command, subscribe
+from common import apublish, frame_url, load_env, run_stop_command, subscribe
 from deciders import Check, ClaudeDecider, Decider, JevDecider
 
 EVENTS_DIR = Path.home() / ".waldo" / "events"
@@ -106,7 +106,7 @@ class Watcher:
 
 async def grab(session, camera: str) -> bytes | None:
     try:
-        async with session.get(f"{CAMERA_URL}/frame/{camera}.jpg", timeout=2) as resp:
+        async with session.get(frame_url(camera), timeout=2) as resp:
             return await resp.read() if resp.status == 200 else None
     except Exception:
         return None

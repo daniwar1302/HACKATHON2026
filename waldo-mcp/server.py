@@ -17,7 +17,8 @@ from mcp.server.fastmcp import FastMCP, Image
 
 IFACE = os.environ.get("WALDO_IFACE", "enp5s0")
 CAMERA_URL = os.environ.get("WALDO_CAMERA_URL", "http://10.2.1.180:8766")
-CAMERAS = ("head_camera", "waldo_webcam")
+PHONE_CAMERA_URL = os.environ.get("WALDO_PHONE_CAMERA_URL", "http://127.0.0.1:8773")  # served by waldo-live's bridge
+CAMERAS = ("head_camera", "waldo_webcam", "phone")
 
 FSM_ZERO_TORQUE, FSM_DAMP, FSM_STAND_LOCK, FSM_BALANCE = 0, 1, 4, 500
 BALANCED = (200, 500)
@@ -124,11 +125,13 @@ def get_state() -> dict:
 
 @mcp.tool()
 def look(camera: str = "head_camera") -> Image:
-    """One JPEG frame from a camera: 'head_camera' (robot's view) or 'waldo_webcam' (room)."""
+    """One JPEG frame from a camera: 'head_camera' (robot's view, points at the floor),
+    'waldo_webcam' (room), or 'phone' (a phone mounted at the robot's eye level, when connected)."""
     if camera not in CAMERAS:
         raise ValueError(f"camera must be one of {CAMERAS}")
+    base = PHONE_CAMERA_URL if camera == "phone" else CAMERA_URL
     try:
-        with urllib.request.urlopen(f"{CAMERA_URL}/frame/{camera}.jpg", timeout=5) as resp:
+        with urllib.request.urlopen(f"{base}/frame/{camera}.jpg", timeout=5) as resp:
             return Image(data=resp.read(), format="jpeg")
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"{camera} has no current frame (HTTP {e.code}); try the other camera") from e

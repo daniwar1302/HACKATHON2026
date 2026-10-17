@@ -37,6 +37,7 @@ import aiohttp
 from aiohttp import web
 
 from commands import Commands, find_confirmation
+from phonecam import LOCAL_PORT as PHONE_LOCAL_PORT, PhoneCam, token as phone_token
 
 CONFIRM_WAIT_S = 4.0
 from common import BRAIN_URL, BUS_URL, CAMERA_URL, ENV_FILE, apublish, load_env, publish, run_stop_command, subscribe
@@ -599,14 +600,20 @@ async def serve() -> None:
         print("WARNING: no WALDO_INKBOX_SIGNING_KEY; run `bridge.py setup-signing-key` (calls are refused until then "
               "unless WALDO_ALLOW_UNSIGNED=1)")
     bridge = Bridge(identity, listener.tunnel.public_host, signing_key)
+    phone = PhoneCam(phone_token())
     async with aiohttp.ClientSession() as http:
         bridge.http = http
-        app = web.Application()
+        app = web.Application(client_max_size=3 * 1024 * 1024)
         app.router.add_get(WS_PATH, bridge.handle_call)
+        phone.add_public_routes(app)
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "127.0.0.1", PORT).start()
+        local = web.AppRunner(phone.local_app())  # latest phone frame, for this machine only
+        await local.setup()
+        await web.TCPSite(local, "127.0.0.1", PHONE_LOCAL_PORT).start()
         print(f"bridge ready: wss://{listener.tunnel.public_host}{WS_PATH} -> 127.0.0.1:{PORT}")
+        print(f"phone camera: open `./run.sh bridge phone-link` on the phone; frames at 127.0.0.1:{PHONE_LOCAL_PORT}/frame/phone.jpg")
         print(f"command menu: {[m['command'] for m in bridge.commands.menu()]}; text 'call me' to Waldo's iMessage to get a call")
         try:
             await asyncio.gather(bridge.bus_loop(), bridge.imessage_loop())
@@ -634,6 +641,7 @@ if __name__ == "__main__":
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("serve")
     sub.add_parser("setup-signing-key")
+    sub.add_parser("phone-link", help="print the link that turns a phone into Waldo's 'phone' camera")
     c = sub.add_parser("call", help='help mode: call "reason" "question"; command mode: call --mode command')
     c.add_argument("reason", nargs="?", default="operator asked for a call")
     c.add_argument("question", nargs="?", default="")
@@ -644,6 +652,12 @@ if __name__ == "__main__":
         asyncio.run(serve())
     elif args.cmd == "setup-signing-key":
         setup_signing_key()
+    elif args.cmd == "phone-link":
+        from inkbox import Inkbox
+
+        with Inkbox() as client:
+            host = client.get_identity(os.environ.get("WALDO_ASK_IDENTITY", "waldo-agent")).tunnel.public_host
+        print(f"https://{host}/phone-cam?t={phone_token()}")
     else:
         ok = publish({"type": "call_requested", "reason": args.reason, "question": args.question, "task": args.task, "mode": args.mode})
         print("call requested" if ok else "bus not running (python bus.py)")

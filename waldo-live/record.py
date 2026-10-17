@@ -16,7 +16,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from common import CAMERA_URL, load_env
+from common import frame_url, load_env
 from watch import Task
 
 CLIPS = Path.home() / "clips"
@@ -54,7 +54,7 @@ def main() -> None:
     while time.monotonic() < deadline:
         tick = time.monotonic()
         try:
-            jpeg = urllib.request.urlopen(f"{CAMERA_URL}/frame/{task.camera}.jpg", timeout=2).read()
+            jpeg = urllib.request.urlopen(frame_url(task.camera), timeout=2).read()
         except Exception as e:
             print(f"camera: {e}")
             continue

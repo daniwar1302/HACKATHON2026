@@ -12,6 +12,12 @@ ENV_FILE = Path.home() / ".waldo-ask" / "env"
 BUS_URL = os.environ.get("WALDO_BUS", "http://127.0.0.1:8770")
 BRAIN_URL = os.environ.get("WALDO_BRAIN", "http://127.0.0.1:8772")
 CAMERA_URL = os.environ.get("WALDO_CAMERA_URL", "http://10.2.1.180:8766")
+PHONE_CAMERA_URL = os.environ.get("WALDO_PHONE_CAMERA_URL", "http://127.0.0.1:8773")
+
+
+def frame_url(camera: str) -> str:
+    """Latest-frame URL for a camera: the viewer's cameras, or `phone` (served by the bridge)."""
+    return f"{PHONE_CAMERA_URL if camera == 'phone' else CAMERA_URL}/frame/{camera}.jpg"
 
 
 def load_env(path: Path = ENV_FILE) -> None:

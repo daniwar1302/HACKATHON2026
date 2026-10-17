@@ -325,6 +325,34 @@ def test_authorized_requires_token_and_signature(monkeypatch):
     assert b._authorized(SimpleNamespace(query={"s": "tok2"}, headers={})) is None  # one-time token
 
 
+# -- phone camera ------------------------------------------------------------
+
+async def test_phone_cam_needs_token_and_serves_latest_frame_locally():
+    from phonecam import PhoneCam
+    from aiohttp import web
+
+    cam = PhoneCam("secret")
+    public = web.Application()
+    cam.add_public_routes(public)
+    async with TestClient(TestServer(public)) as pub, TestClient(TestServer(cam.local_app())) as local:
+        assert (await pub.get("/phone-cam?t=wrong")).status == 404
+        assert "getUserMedia" in await (await pub.get("/phone-cam?t=secret")).text()
+        assert (await pub.post("/frame?t=wrong", data=b"\xff\xd8jpg")).status == 404
+        assert (await pub.post("/frame?t=secret", data=b"not a jpeg")).status == 400
+        assert (await local.get("/frame/phone.jpg")).status == 503  # nothing yet
+        assert (await pub.post("/frame?t=secret", data=b"\xff\xd8jpg")).status == 200
+        resp = await local.get("/frame/phone.jpg")
+        assert resp.status == 200 and await resp.read() == b"\xff\xd8jpg"
+        assert (await pub.get("/frame/phone.jpg")).status == 404  # never served on the public side
+
+
+def test_frame_url_routes_phone_to_the_bridge():
+    from common import frame_url
+
+    assert frame_url("phone") == "http://127.0.0.1:8773/frame/phone.jpg"
+    assert frame_url("waldo_webcam").endswith(":8766/frame/waldo_webcam.jpg")
+
+
 # -- brain -----------------------------------------------------------------
 
 class FakeMessages:
