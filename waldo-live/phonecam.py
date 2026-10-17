@@ -56,7 +56,7 @@ async function loop() {
       if (!r.ok) throw new Error("HTTP " + r.status);
       sent++; say("Sending to Waldo: " + sent + " frames", "ok");
     } catch (e) { say("Waldo isn't receiving (" + e.message + "). Retrying...", "bad"); }
-    await new Promise(r => setTimeout(r, Math.max(0, 250 - (Date.now() - t))));
+    await new Promise(r => setTimeout(r, Math.max(0, 100 - (Date.now() - t))));
   }
 }
 document.getElementById("go").onclick = async () => {
