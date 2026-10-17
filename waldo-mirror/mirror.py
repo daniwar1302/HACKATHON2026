@@ -102,7 +102,7 @@ def main() -> None:
     landmarker = vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=str(MODEL)), running_mode=vision.RunningMode.VIDEO, num_poses=1))
     smooth = Smoother(0.5)
-    last_seen, last_print, period = time.monotonic(), 0.0, 1.0 / args.fps
+    last_seen, last_frame, last_print, period = time.monotonic(), time.monotonic(), 0.0, 1.0 / args.fps
     hands = ik.hand_positions(q)
     try:
         for ts, rgb in frames(args.camera):
@@ -111,6 +111,7 @@ def main() -> None:
                 break
             seen = False
             if rgb is not None:
+                last_frame = time.monotonic()
                 result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
                 if result.pose_world_landmarks:
                     lm = result.pose_world_landmarks[0]
@@ -137,7 +138,10 @@ def main() -> None:
             if time.monotonic() - last_print > 0.5:
                 last_print = time.monotonic()
                 deg = np.degrees(q).round().astype(int)
-                status = "tracking" if lost < HOLD_AFTER_S else ("holding" if lost < RETURN_AFTER_S else "no person, arms home")
+                if time.monotonic() - last_frame > 2:
+                    status = "NO CAMERA FRAMES"
+                else:
+                    status = "tracking" if lost < HOLD_AFTER_S else ("holding" if lost < RETURN_AFTER_S else "no person, arms home")
                 print(f"{status:>22} | L sh p/r/y {deg[0]:+4d} {deg[1]:+4d} {deg[2]:+4d} elbow {deg[3]:+4d} | "
                       f"R sh p/r/y {deg[7]:+4d} {deg[8]:+4d} {deg[9]:+4d} elbow {deg[10]:+4d}")
             time.sleep(max(0.0, period - (time.monotonic() - t0)))
