@@ -249,6 +249,36 @@ async def test_disabled_or_unknown_command_is_refused(monkeypatch):
     assert not out["ok"] and out["available"] == ["status", "wave"]
 
 
+class ApprovingCommands(Commands):
+    """Fake robot server that asks for approval before moving, like the WidowX server."""
+
+    def __init__(self):
+        super().__init__({"commands": {
+            "arm wave": {"tool": "widowx__widowx_trajectory_run", "args": {"trajectory": "wave"}, "motion": True, "enabled": True},
+            "arm check": {"tool": "widowx__widowx_doctor", "enabled": True},
+        }})
+
+    async def call_tool(self, qualified, args):
+        answer = await self.on_approval_request(None, SimpleNamespace(message=f"Run {args}? The arms will move."))
+        moved = answer.action == "accept" and answer.content == {"confirmed": True, "remember": False}
+        return {"ok": moved, "result": "moved" if moved else "declined"}
+
+
+async def test_robot_approval_is_given_once_for_a_confirmed_motion():
+    c = ApprovingCommands()
+    out = await c.run("arm wave")
+    assert out["ok"] and "The arms will move" in out["robot_asked"]
+    assert c._approval_for is None  # spent
+    answer = await c.on_approval_request(None, SimpleNamespace(message="move again?"))
+    assert answer.action == "decline"  # nothing armed outside a confirmed command
+
+
+async def test_no_approval_for_a_non_motion_command():
+    c = ApprovingCommands()
+    out = await c.run("arm check")  # a tool that unexpectedly asks to move gets a no
+    assert not out["ok"] and c.approvals[-1]["approved"] is False
+
+
 def test_find_confirmation_window_and_wording():
     from commands import CONFIRM_WINDOW_S, find_confirmation
 

@@ -475,6 +475,9 @@ class Bridge:
             args = {}
         if name == "consult_robot":
             await s.respond("Say one very short filler like 'one sec, let me check' and nothing else.")
+        elif name == "run_command" and getattr(self.commands.commands.get(args.get("command", "")), "slow", False):
+            await s.respond("Say in one short sentence that you're starting it and it takes a few seconds "
+                            "because it runs a safety check first. Nothing else.")
         try:
             output = await self._run_tool(s, name, args)
         except Exception as e:

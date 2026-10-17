@@ -10,6 +10,11 @@ the operator has said yes on the call (checked against the transcript, not the m
                            "args": {"name": "high wave"}, "motion": true, "enabled": true}}}
 
 A command can be {"builtin": "snapshot"} instead of a tool: text the operator a camera photo.
+"slow": true makes Waldo say it'll take a moment (e.g. WidowX trajectories run a sim check first).
+
+Robot servers that ask a person to approve each move (MCP elicitation, like the WidowX server)
+get exactly one "yes, don't remember" per motion command the operator confirmed on the call.
+Any other approval question is declined, so nothing moves that the operator didn't say yes to.
 """
 from __future__ import annotations
 
@@ -34,6 +39,7 @@ class Command:
     args: dict = field(default_factory=dict)
     builtin: str | None = None
     motion: bool = False
+    slow: bool = False
 
 
 class Commands:
@@ -41,12 +47,26 @@ class Commands:
         self.servers = config.get("servers", {})
         self.stop_tool = config.get("stop")
         self.commands = {
-            name: Command(name, c.get("description", name), c.get("tool"), c.get("args", {}), c.get("builtin"), bool(c.get("motion")))
+            name: Command(name, c.get("description", name), c.get("tool"), c.get("args", {}), c.get("builtin"),
+                          bool(c.get("motion")), bool(c.get("slow")))
             for name, c in config.get("commands", {}).items() if c.get("enabled")
         }
         self.builtins = builtins or {}
         self._stack: AsyncExitStack | None = None
         self._sessions: dict = {}
+        self._approval_for: str | None = None  # motion command the operator said yes to, while it runs
+        self.approvals: list[dict] = []  # what robot servers asked, and what we answered
+
+    async def on_approval_request(self, context, params):
+        """Answer a robot server's "may I move?" question (MCP elicitation)."""
+        from mcp import types
+
+        question = getattr(params, "message", "")
+        command, self._approval_for = self._approval_for, None  # one yes, used once
+        self.approvals.append({"command": command, "question": question, "approved": command is not None})
+        if command is None:
+            return types.ElicitResult(action="decline")
+        return types.ElicitResult(action="accept", content={"confirmed": True, "remember": False})
 
     @classmethod
     def load(cls, builtins=None, path: Path = CONFIG) -> "Commands":
@@ -64,7 +84,8 @@ class Commands:
             self._stack = self._stack or AsyncExitStack()
             params = StdioServerParameters(command=spec["command"], args=spec.get("args", []), env={**os.environ, **spec.get("env", {})})
             read, write = await self._stack.enter_async_context(stdio_client(params))
-            session = await self._stack.enter_async_context(ClientSession(read, write))
+            session = await self._stack.enter_async_context(
+                ClientSession(read, write, elicitation_callback=self.on_approval_request))
             await session.initialize()
             self._sessions[server] = session
         return self._sessions[server]
@@ -76,10 +97,19 @@ class Commands:
         return {"ok": not result.isError, "result": text[:800]}
 
     async def run(self, name: str) -> dict:
+        """Run a command. Call only after the operator confirmed it if it's a motion."""
         cmd = self.commands[name]
         if cmd.builtin:
             return await self.builtins[cmd.builtin]()
-        return await self.call_tool(cmd.tool, cmd.args)
+        asked_before = len(self.approvals)
+        self._approval_for = name if cmd.motion else None
+        try:
+            result = await self.call_tool(cmd.tool, cmd.args)
+        finally:
+            self._approval_for = None
+        if len(self.approvals) > asked_before:
+            result["robot_asked"] = self.approvals[-1]["question"][:300]
+        return result
 
     async def stop(self) -> dict | None:
         return await self.call_tool(self.stop_tool, {}) if self.stop_tool else None

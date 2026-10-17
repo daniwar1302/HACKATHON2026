@@ -1,16 +1,140 @@
 {
   "servers": {
-    "g1": {"command": "/home/waldo/HACKATHON2026/waldo-mcp/run.sh"}
+    "g1": {
+      "command": "/home/waldo/HACKATHON2026/waldo-mcp/run.sh"
+    },
+    "widowx": {
+      "command": "/home/waldo/.local/bin/uv",
+      "args": [
+        "run",
+        "--project",
+        "/home/waldo/mission-robotics/.claude/worktrees/widowx-mcp-server-nu3kui/plugins/widowx",
+        "--with",
+        "mcp>=2.2",
+        "python",
+        "/home/waldo/mission-robotics/.claude/worktrees/widowx-mcp-server-nu3kui/plugins/widowx/mcp/server.py"
+      ]
+    }
   },
   "stop": "g1__stop",
   "commands": {
-    "status":   {"description": "say what state the robot is in (standing, limp...)", "tool": "g1__get_state", "enabled": true},
-    "snapshot": {"description": "text the operator a photo from the room camera", "builtin": "snapshot", "enabled": true},
-    "stand up": {"description": "stand up and balance (robot must be on the gantry or feet on the floor)", "tool": "g1__stand_up", "args": {"supported": true}, "motion": true, "enabled": false},
-    "wave":     {"description": "wave hello", "tool": "g1__gesture", "args": {"name": "high wave"}, "motion": true, "enabled": false},
-    "clap":     {"description": "clap", "tool": "g1__gesture", "args": {"name": "clap"}, "motion": true, "enabled": false},
-    "heart":    {"description": "make a heart with the hands", "tool": "g1__gesture", "args": {"name": "heart"}, "motion": true, "enabled": false},
-    "high five": {"description": "hold up a hand for a high five", "tool": "g1__gesture", "args": {"name": "high five"}, "motion": true, "enabled": false},
-    "arms down": {"description": "put the arms back to neutral", "tool": "g1__gesture", "args": {"name": "release arm"}, "motion": true, "enabled": false}
+    "status": {
+      "description": "say what state the robot is in (standing, limp...)",
+      "tool": "g1__get_state",
+      "enabled": true
+    },
+    "snapshot": {
+      "description": "text the operator a photo from the room camera",
+      "builtin": "snapshot",
+      "enabled": true
+    },
+    "stand up": {
+      "description": "stand up and balance (robot must be on the gantry or feet on the floor)",
+      "tool": "g1__stand_up",
+      "args": {
+        "supported": true
+      },
+      "motion": true,
+      "enabled": false
+    },
+    "wave": {
+      "description": "wave hello",
+      "tool": "g1__gesture",
+      "args": {
+        "name": "high wave"
+      },
+      "motion": true,
+      "enabled": false
+    },
+    "clap": {
+      "description": "clap",
+      "tool": "g1__gesture",
+      "args": {
+        "name": "clap"
+      },
+      "motion": true,
+      "enabled": false
+    },
+    "heart": {
+      "description": "make a heart with the hands",
+      "tool": "g1__gesture",
+      "args": {
+        "name": "heart"
+      },
+      "motion": true,
+      "enabled": false
+    },
+    "high five": {
+      "description": "hold up a hand for a high five",
+      "tool": "g1__gesture",
+      "args": {
+        "name": "high five"
+      },
+      "motion": true,
+      "enabled": false
+    },
+    "arms down": {
+      "description": "put the arms back to neutral",
+      "tool": "g1__gesture",
+      "args": {
+        "name": "release arm"
+      },
+      "motion": true,
+      "enabled": false
+    },
+    "arm check": {
+      "description": "check the WidowX arms and cameras are connected and ready (moves nothing)",
+      "tool": "widowx__widowx_doctor",
+      "enabled": true
+    },
+    "arm wave": {
+      "description": "the WidowX arms play the 'wave' motion",
+      "tool": "widowx__widowx_trajectory_run",
+      "args": {
+        "trajectory": "wave",
+        "velocity_fraction": 0.4
+      },
+      "motion": true,
+      "slow": true,
+      "enabled": true
+    },
+    "arm figure eight": {
+      "description": "the WidowX arm traces a figure eight",
+      "tool": "widowx__widowx_trajectory_run",
+      "args": {
+        "trajectory": "figure-eight",
+        "velocity_fraction": 0.4
+      },
+      "motion": true,
+      "slow": true,
+      "enabled": true
+    },
+    "open gripper": {
+      "description": "open the WidowX gripper",
+      "tool": "widowx__widowx_gripper",
+      "args": {
+        "opening": "open"
+      },
+      "motion": true,
+      "enabled": true
+    },
+    "close gripper": {
+      "description": "close the WidowX gripper",
+      "tool": "widowx__widowx_gripper",
+      "args": {
+        "opening": "close"
+      },
+      "motion": true,
+      "enabled": true
+    },
+    "gripper status": {
+      "description": "say how far open the WidowX gripper is (moves nothing)",
+      "tool": "widowx__widowx_gripper",
+      "args": {
+        "opening": "open",
+        "dry_run": true
+      },
+      "enabled": true
+    }
   }
 }
