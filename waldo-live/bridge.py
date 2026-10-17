@@ -218,7 +218,7 @@ class Bridge:
         self.signing_key = signing_key
         self.operator = os.environ["WALDO_OPERATOR_PHONE"]
         self.openai_key = os.environ["OPENAI_API_KEY"]
-        self.model = os.environ.get("WALDO_REALTIME_MODEL", "gpt-realtime-2")
+        self.model = os.environ.get("WALDO_REALTIME_MODEL", "gpt-realtime-2.1")
         self.voice = os.environ.get("WALDO_REALTIME_VOICE", "cedar")
         self.briefs: dict[str, dict] = {}
         self.active: CallSession | None = None
