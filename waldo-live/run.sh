@@ -3,4 +3,5 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$HOME/.waldo-ask/env" ] && { set -a; . "$HOME/.waldo-ask/env"; set +a; }
 cmd="$1"; shift
+export PYTHONUNBUFFERED=1
 cd "$DIR" && exec "$DIR/.venv/bin/python" "$cmd.py" "$@"
