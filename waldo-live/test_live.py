@@ -201,17 +201,46 @@ async def test_no_motion_command_runs_immediately(monkeypatch):
 
 
 async def test_motion_needs_the_operator_to_say_yes_on_the_call(monkeypatch):
+    monkeypatch.setattr(bridge, "CONFIRM_WAIT_S", 0.3)
     b, s = command_bridge(monkeypatch), session()
-    first = await b.run_command(s, "wave")
-    assert first["needs_confirmation"] and b.commands.calls == []
-    second = await b.run_command(s, "wave")  # the model calling again without a yes doesn't count
-    assert second["needs_confirmation"] and b.commands.calls == []
-    s.transcripts.append((time.monotonic() + 0.01, "local", "Wave, go ahead?"))  # Waldo saying it doesn't count either
-    assert (await b.run_command(s, "wave"))["needs_confirmation"]
-    s.transcripts.append((time.monotonic() + 0.01, "remote", "yeah go ahead"))
+    assert (await b.run_command(s, "wave"))["needs_confirmation"] and b.commands.calls == []
+    now = time.monotonic()
+    s.transcripts += [(now, "remote", "wave"), (now + 0.1, "local", "I'll wave. Go ahead?")]
+    assert (await b.run_command(s, "wave"))["needs_confirmation"]  # Waldo asking isn't a yes
+    s.transcripts.append((now + 0.2, "remote", "Yes."))
     assert (await b.run_command(s, "wave"))["ok"]
     assert b.commands.calls == [("g1__gesture", {"name": "high wave"})]
     assert (await b.run_command(s, "wave"))["needs_confirmation"]  # each motion needs its own yes
+
+
+async def test_yes_transcribed_late_still_counts(monkeypatch):
+    b, s = command_bridge(monkeypatch), session()
+    now = time.monotonic()
+    s.transcripts.append((now, "local", "I'll wave. Go ahead?"))
+
+    async def late_transcript():
+        await asyncio.sleep(0.5)
+        s.transcripts.append((time.monotonic(), "remote", "Yes."))
+
+    asyncio.create_task(late_transcript())
+    assert (await b.run_command(s, "wave"))["ok"]
+
+
+async def test_yes_to_something_else_does_not_confirm(monkeypatch):
+    monkeypatch.setattr(bridge, "CONFIRM_WAIT_S", 0.3)
+    b, s = command_bridge(monkeypatch), session()
+    now = time.monotonic()
+    s.transcripts += [(now, "local", "Want your status?"), (now + 0.1, "remote", "yes")]
+    assert (await b.run_command(s, "wave"))["needs_confirmation"]
+
+
+async def test_stop_cancels_earlier_yes(monkeypatch):
+    monkeypatch.setattr(bridge, "CONFIRM_WAIT_S", 0.3)
+    b, s = command_bridge(monkeypatch), session()
+    now = time.monotonic()
+    s.transcripts += [(now, "local", "I'll wave. Go ahead?"), (now + 0.1, "remote", "yes")]
+    await b._run_tool(s, "stop_robot", {})
+    assert (await b.run_command(s, "wave"))["needs_confirmation"]
 
 
 async def test_disabled_or_unknown_command_is_refused(monkeypatch):
@@ -220,14 +249,15 @@ async def test_disabled_or_unknown_command_is_refused(monkeypatch):
     assert not out["ok"] and out["available"] == ["status", "wave"]
 
 
-def test_operator_confirmed_window():
-    from commands import CONFIRM_WINDOW_S, operator_confirmed
+def test_find_confirmation_window_and_wording():
+    from commands import CONFIRM_WINDOW_S, find_confirmation
 
-    said = [(10.0, "remote", "yes please")]
-    assert operator_confirmed(said, since=5.0, now=11.0)
-    assert not operator_confirmed(said, since=10.5, now=11.0)  # said before the question
-    assert not operator_confirmed(said, since=5.0, now=5.0 + CONFIRM_WINDOW_S + 1)
-    assert not operator_confirmed([(10.0, "remote", "no, wait")], since=5.0, now=11.0)
+    said = [(9.0, "local", "I'll wave. Go ahead?"), (10.0, "remote", "yes please")]
+    assert find_confirmation(said, "wave", now=11.0, used=set()) == 10.0
+    assert find_confirmation(said, "wave", now=11.0, used={10.0}) is None
+    assert find_confirmation(said, "wave", now=10.0 + CONFIRM_WINDOW_S + 1, used=set()) is None
+    assert find_confirmation([(9.0, "local", "Go ahead?"), (10.0, "remote", "no, wait")], "wave", 11.0, set()) is None
+    assert find_confirmation([(10.0, "remote", "yes")], "wave", 11.0, set()) is None  # nothing was asked
 
 
 async def test_text_call_me_requests_a_command_call(monkeypatch):

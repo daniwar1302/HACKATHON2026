@@ -36,7 +36,9 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-from commands import Commands, operator_confirmed
+from commands import Commands, find_confirmation
+
+CONFIRM_WAIT_S = 4.0
 from common import BRAIN_URL, BUS_URL, CAMERA_URL, ENV_FILE, apublish, load_env, publish, run_stop_command, subscribe
 
 CALL_ME = re.compile(r"\bcall me\b", re.I)
@@ -66,8 +68,8 @@ COMMAND_INSTRUCTIONS = """You are Waldo, a robot in a robotics lab, on a phone c
 Speak in short, natural sentences.
 
 - You can only do what run_command offers. If asked for something else, say so and list a few options.
-- For a command that moves the robot: say what you will do and ask "go ahead?". Only after the operator
-  says yes, call run_command. If it answers needs_confirmation, ask again and wait for a clear yes.
+- For a command that moves the robot: name it and ask "go ahead?" (for example "I'll wave. Go ahead?").
+  Only after the operator says yes, call run_command. If it answers needs_confirmation, ask again the same way.
 - Commands that don't move the robot (like status) run right away.
 - After a command, say the result in one sentence.
 - If the operator says stop, wait, or anything like it, call stop_robot immediately, no confirmation.
@@ -168,7 +170,7 @@ class CallSession:
     call_id: str = ""
     mode: str = "help"  # help: Waldo needs help with a task; command: operator gives commands
     transcripts: list = field(default_factory=list)  # (monotonic t, party, text)
-    pending: dict = field(default_factory=dict)  # motion command -> when confirmation was requested
+    used_yes: set = field(default_factory=set)  # transcript times of yeses already spent on a motion
     end_reason: str = ""
     stats: collections.Counter = field(default_factory=collections.Counter)
     inbound: AudioConverter | None = None
@@ -500,7 +502,7 @@ class Bridge:
             return await self.run_command(s, args.get("command", ""))
         if name == "stop_robot":
             await apublish(self.http, {"type": "stop_requested", "by": "operator"})
-            s.pending.clear()
+            s.used_yes.update(t for t, party, _ in s.transcripts if party == "remote")  # no earlier yes survives a stop
             results = []
             if self.commands.stop_tool:
                 try:
@@ -524,14 +526,17 @@ class Bridge:
         cmd = self.commands.commands.get(name)
         if cmd is None:
             return {"ok": False, "error": f"unknown command {name!r}", "available": [m["command"] for m in self.commands.menu()]}
-        now = time.monotonic()
         if cmd.motion:
-            asked = s.pending.get(name)
-            if asked is None or not operator_confirmed(s.transcripts, asked, now):
-                s.pending[name] = now
-                return {"ok": False, "needs_confirmation": True,
-                        "note": f"Ask the operator to confirm '{name}' and wait for a clear yes, then call run_command again."}
-            s.pending.pop(name, None)
+            # The operator's words are transcribed a moment after the voice agent acts on them,
+            # so give the transcript a few seconds to catch up before refusing.
+            deadline = time.monotonic() + CONFIRM_WAIT_S
+            while (yes_at := find_confirmation(s.transcripts, name, time.monotonic(), s.used_yes)) is None:
+                if time.monotonic() >= deadline:
+                    return {"ok": False, "needs_confirmation": True,
+                            "note": f"Ask the operator whether to {name} (say '{name}' or 'go ahead?'), wait for a clear yes, "
+                                    "then call run_command again."}
+                await asyncio.sleep(0.25)
+            s.used_yes.add(yes_at)
         await apublish(self.http, {"type": "command_started", "command": name, "call_id": s.call_id})
         try:
             result = await self.commands.run(name)

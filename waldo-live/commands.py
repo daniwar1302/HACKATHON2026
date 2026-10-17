@@ -90,8 +90,19 @@ class Commands:
             self._stack, self._sessions = None, {}
 
 
-def operator_confirmed(transcripts: list[tuple[float, str, str]], since: float, now: float) -> bool:
-    """Did the operator say yes after `since` (and within the confirm window)?"""
-    if now - since > CONFIRM_WINDOW_S:
-        return False
-    return any(t > since and party == "remote" and YES.search(text) for t, party, text in transcripts)
+def find_confirmation(transcripts: list[tuple[float, str, str]], command: str, now: float, used: set) -> float | None:
+    """When the operator said yes to this command, or None.
+
+    A yes counts if it's recent, hasn't confirmed something already, and answers Waldo:
+    the last thing Waldo said before it mentioned this command or asked "go ahead".
+    """
+    for i in range(len(transcripts) - 1, -1, -1):
+        t, party, text = transcripts[i]
+        if now - t > CONFIRM_WINDOW_S:
+            break
+        if party != "remote" or t in used or not YES.search(text):
+            continue
+        asked = next((q for _, p, q in reversed(transcripts[:i]) if p == "local"), "")
+        if command.lower() in asked.lower() or "go ahead" in asked.lower():
+            return t
+    return None
