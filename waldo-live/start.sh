@@ -5,7 +5,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 S=waldo
 if ! tmux has-session -t "$S" 2>/dev/null; then
   pane() { echo "cd '$DIR' && ./run.sh $1; echo; read -p '[$2 exited - Enter closes this pane] ' x"; }
-  pkill -f "python (bus|watch|bridge|brain).py" 2>/dev/null  # leftovers from a pane killed mid-pipe
+  pkill -f "/waldo-live/.venv/bin/python (bus|watch|bridge|brain).py" 2>/dev/null  # leftovers from a pane killed mid-pipe
   bus=$(tmux new-session -d -P -F '#{pane_id}' -s "$S" -x 220 -y 50 "$(pane bus bus)")
   sleep 1  # the others subscribe to the bus
   watcher=$(tmux split-window -P -F '#{pane_id}' -t "$bus" -h "$(pane 'watch run --task tasks/lift_cup.json --verbose' watcher)")

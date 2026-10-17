@@ -10,7 +10,7 @@ case "$1" in
 esac
 pane=$(tmux list-panes -t waldo -F "#{pane_id} #{pane_title}" | awk -v t="$1" '$2==t{print $1}')
 [ -n "$pane" ] || { echo "no '$1' pane; run ./start.sh"; exit 1; }
-pkill -f "python $py" 2>/dev/null  # a pane piped through grep can leave python running
+pkill -f "/waldo-live/.venv/bin/python $py" 2>/dev/null  # a pane piped through grep can leave python running
 sleep 1
 tmux respawn-pane -k -t "$pane" "cd '$DIR' && ./run.sh $cmd; echo; read -p '[$1 exited - Enter closes this pane] ' x"
 tmux select-pane -t "$pane" -T "$1"
