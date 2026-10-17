@@ -64,7 +64,12 @@ uv run --with "mcp>=2.2" ~/HACKATHON2026/waldo-console/g1_webui.py
 http://localhost:8780: status, modes, built-in gestures (need FSM 500/801), speech, LED, volume, **STOP**.
 Rehearse with `G1_DRY_RUN=1`.
 
-### D. Teleop: arms + grippers follow a controller (headset or browser)
+### D. Agent drives the hands: `waldo-arms` (the main path)
+Robot in **500**, `arm_server` running (E below, steps 1–2), teleop **not** running. Then add the MCP server
+([`waldo-arms/README.md`](../waldo-arms/README.md)) to Claude Code or the brain and give it a task:
+`look` → `check_reach` → `move_hand` → `gripper` → … → `release`.
+
+### D2. Legacy manual mode: teleop (headset or browser controller page)
 1. Robot in **500**, `arm_server` **not** running.
 2. On Waldo:
    ```sh

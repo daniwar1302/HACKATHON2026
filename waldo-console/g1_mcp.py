@@ -18,6 +18,7 @@ import subprocess
 from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError  # message reaches the agent; plain exceptions don't
 
 HOST = os.environ.get("G1_HOST", "waldo@100.120.182.66")
 KEY = os.path.expanduser(os.environ.get("G1_KEY", "~/.ssh/id_ed25519_waldo"))
@@ -83,7 +84,7 @@ def sdk(calls, queue=True):
     """
     for c, m, _, _ in calls:
         if (c, m) not in ALLOWED:
-            raise ValueError(f"{c}.{m} is not on the allow-list")
+            raise ToolError(f"{c}.{m} is not on the allow-list")
     if DRY:
         return [f"DRY RUN: {c}.{m}{tuple(a)}" + (f" then wait {p}s" if p else "") for c, m, a, p in calls]
     reads_only = all(m.startswith("Get") or m == "CheckMode" for _, m, _, _ in calls)
@@ -93,10 +94,10 @@ def sdk(calls, queue=True):
     r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-i", KEY, HOST, remote],
                        capture_output=True, text=True, timeout=LOCK_WAIT_S + 120)
     if r.returncode == LOCK_BUSY:
-        raise RuntimeError(f"robot busy: another session held it for {LOCK_WAIT_S}s; try again")
+        raise ToolError(f"robot busy: another session held it for {LOCK_WAIT_S}s; try again")
     line = next((l for l in r.stdout.splitlines() if l.startswith("G1JSON")), None)
     if line is None:
-        raise RuntimeError(f"waldo call failed (exit {r.returncode}): {(r.stderr or r.stdout)[-600:]}")
+        raise ToolError(f"waldo call failed (exit {r.returncode}): {(r.stderr or r.stdout)[-600:]}")
     return json.loads(line[len("G1JSON"):])
 
 
