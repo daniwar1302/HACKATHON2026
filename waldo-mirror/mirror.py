@@ -58,6 +58,25 @@ def frames(url: str):
             yield int(time.monotonic() * 1000), None
 
 
+def save_debug(path: Path, rgb: np.ndarray, landmarks, lines: list[str]) -> None:
+    """One annotated frame: the person's detected arms plus the robot's targets, for checking the mapping."""
+    import cv2
+
+    img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    h, w = img.shape[:2]
+    if landmarks:
+        pt = {i: (int(landmarks[i].x * w), int(landmarks[i].y * h)) for i in (11, 12, 13, 14, 15, 16, 23, 24)}
+        for a, b, color in ((11, 13, (0, 200, 255)), (13, 15, (0, 200, 255)), (12, 14, (255, 120, 0)), (14, 16, (255, 120, 0)),
+                            (11, 12, (200, 200, 200)), (11, 23, (200, 200, 200)), (12, 24, (200, 200, 200))):
+            cv2.line(img, pt[a], pt[b], color, 3)
+        cv2.putText(img, "person's L", pt[15], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
+        cv2.putText(img, "person's R", pt[16], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 120, 0), 2)
+    for i, line in enumerate(lines):
+        cv2.putText(img, line, (8, 22 + 22 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4)
+        cv2.putText(img, line, (8, 22 + 22 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+    cv2.imwrite(str(path), img)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--live", action="store_true", help="drive the real arms")
@@ -66,7 +85,10 @@ def main() -> None:
     p.add_argument("--camera", default="http://127.0.0.1:8773/frame/phone.jpg")
     p.add_argument("--iface", default="enp5s0")
     p.add_argument("--fps", type=float, default=10.0)
+    p.add_argument("--debug-dir", type=Path, help="save one annotated frame per second here")
     args = p.parse_args()
+    if args.debug_dir:
+        args.debug_dir.mkdir(parents=True, exist_ok=True)
     if not 0.2 <= args.max_vel <= 3.0:
         raise SystemExit("--max-vel must be between 0.2 and 3 rad/s")
 
@@ -103,6 +125,7 @@ def main() -> None:
         base_options=BaseOptions(model_asset_path=str(MODEL)), running_mode=vision.RunningMode.VIDEO, num_poses=1))
     smooth = Smoother(0.5)
     last_seen, last_frame, last_print, period = time.monotonic(), time.monotonic(), 0.0, 1.0 / args.fps
+    last_debug, shots = 0.0, 0
     hands = ik.hand_positions(q)
     try:
         for ts, rgb in frames(args.camera):
@@ -110,6 +133,7 @@ def main() -> None:
             if stop.is_set():
                 break
             seen = False
+            result = None
             if rgb is not None:
                 last_frame = time.monotonic()
                 result = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
@@ -135,15 +159,29 @@ def main() -> None:
             lost = time.monotonic() - last_seen
             if arms and lost > RETURN_AFTER_S:
                 arms.set_target(arms.start)
+            if time.monotonic() - last_frame > 2:
+                status = "NO CAMERA FRAMES"
+            else:
+                status = "tracking" if lost < HOLD_AFTER_S else ("holding" if lost < RETURN_AFTER_S else "no person, arms home")
             if time.monotonic() - last_print > 0.5:
                 last_print = time.monotonic()
                 deg = np.degrees(q).round().astype(int)
-                if time.monotonic() - last_frame > 2:
-                    status = "NO CAMERA FRAMES"
-                else:
-                    status = "tracking" if lost < HOLD_AFTER_S else ("holding" if lost < RETURN_AFTER_S else "no person, arms home")
-                print(f"{status:>22} | L sh p/r/y {deg[0]:+4d} {deg[1]:+4d} {deg[2]:+4d} elbow {deg[3]:+4d} | "
-                      f"R sh p/r/y {deg[7]:+4d} {deg[8]:+4d} {deg[9]:+4d} elbow {deg[10]:+4d}")
+                cm = {s: (hands[s] * 100).round().astype(int) for s in hands}
+                print(f"{status:>22} | robot L hand fwd/left/up {cm['left'][0]:+4d} {cm['left'][1]:+4d} {cm['left'][2]:+4d} cm "
+                      f"(sh p/r/y {deg[0]:+4d} {deg[1]:+4d} {deg[2]:+4d} elbow {deg[3]:+4d}) | "
+                      f"R hand {cm['right'][0]:+4d} {cm['right'][1]:+4d} {cm['right'][2]:+4d} cm "
+                      f"(sh p/r/y {deg[7]:+4d} {deg[8]:+4d} {deg[9]:+4d} elbow {deg[10]:+4d})")
+            if args.debug_dir and rgb is not None and time.monotonic() - last_debug >= 1.0:
+                last_debug, shots = time.monotonic(), shots + 1
+                cm = {s: (hands[s] * 100).round().astype(int) for s in hands}
+                deg = np.degrees(q).round().astype(int)
+                save_debug(args.debug_dir / f"{shots:03d}.jpg", rgb,
+                           result.pose_landmarks[0] if result and result.pose_landmarks else None,
+                           [f"{status} ({'copy' if args.copy else 'mirror'})",
+                            f"robot L hand fwd/left/up cm {cm['left'][0]:+d} {cm['left'][1]:+d} {cm['left'][2]:+d}",
+                            f"robot R hand fwd/left/up cm {cm['right'][0]:+d} {cm['right'][1]:+d} {cm['right'][2]:+d}",
+                            f"L sh p/r/y {deg[0]:+d} {deg[1]:+d} {deg[2]:+d} elbow {deg[3]:+d}",
+                            f"R sh p/r/y {deg[7]:+d} {deg[8]:+d} {deg[9]:+d} elbow {deg[10]:+d}"])
             time.sleep(max(0.0, period - (time.monotonic() - t0)))
     except KeyboardInterrupt:
         pass

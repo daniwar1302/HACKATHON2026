@@ -52,6 +52,7 @@ def test_workspace_keeps_hands_in_front_and_on_their_own_side():
     t = hand_targets(crossing, shoulders, {"left": 0.5, "right": 0.5}, ws)
     assert t["left"][1] >= ws.min_side and t["left"][0] >= ws.min_forward
     assert t["right"][0] >= ws.min_forward and t["right"][2] >= ws.min_height
+    assert t["right"][1] <= -ws.low_side  # low hand kept clear of the hip
 
 
 def test_degenerate_pose_raises():

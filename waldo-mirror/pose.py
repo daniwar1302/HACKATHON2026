@@ -66,15 +66,18 @@ def robot_reaches(human: dict[str, np.ndarray | None], mirror: bool = True) -> d
 class Workspace:
     """Where the robot's hands may go, in its waist frame (x forward, y left, z up), metres."""
     min_forward: float = 0.08    # always in front of the torso
-    min_side: float = 0.10       # each hand stays on its own side of the midline
-    min_height: float = -0.05    # not below the waist
+    min_side: float = 0.12       # each hand stays on its own side of the midline
+    low_side: float = 0.20       # ...and further out when down by the hips
+    low_height: float = 0.05     # "down by the hips" means below this
+    min_height: float = -0.20    # about hand-hanging height
     max_height: float = 0.75     # not far over the head
 
     def clamp(self, side: str, p: np.ndarray) -> np.ndarray:
         p = p.copy()
         p[0] = max(p[0], self.min_forward)
-        p[1] = max(p[1], self.min_side) if side == "left" else min(p[1], -self.min_side)
         p[2] = min(max(p[2], self.min_height), self.max_height)
+        side_min = self.low_side if p[2] < self.low_height else self.min_side
+        p[1] = max(p[1], side_min) if side == "left" else min(p[1], -side_min)
         return p
 
 

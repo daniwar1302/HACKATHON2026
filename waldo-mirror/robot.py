@@ -46,30 +46,42 @@ class ArmIK:
         pin.updateFramePlacements(model, data)
         ee = {"left": data.oMf[model.getFrameId("L_ee")], "right": data.oMf[model.getFrameId("R_ee")]}
         self.shoulder = {s: data.oMi[model.getJointId(f"{s}_shoulder_pitch_joint")].translation.copy() for s in ("left", "right")}
-        self.reach = {s: float(np.linalg.norm(ee[s].translation - self.shoulder[s])) for s in ("left", "right")}
-        self.rotation = {s: ee[s].rotation.copy() for s in ("left", "right")}  # hands keep this orientation
+        # The G1's zero pose has the elbow bent, so a straight arm is shoulder->elbow + elbow->hand.
+        elbow = {s: data.oMi[model.getJointId(f"{s}_elbow_joint")].translation for s in ("left", "right")}
+        self.reach = {s: float(np.linalg.norm(elbow[s] - self.shoulder[s]) + np.linalg.norm(ee[s].translation - elbow[s]))
+                      for s in ("left", "right")}
         self.lower = model.lowerPositionLimit + LIMIT_MARGIN
         self.upper = model.upperPositionLimit - LIMIT_MARGIN
 
     def solve(self, left: np.ndarray, right: np.ndarray, current_q: np.ndarray) -> np.ndarray:
-        """14 arm joint angles that put the hands at `left` / `right` (waist frame), within limits."""
+        """14 arm joint angles that put the hands at `left` / `right` (waist frame), within limits.
+
+        Only the hand position matters: each target keeps the hand's current orientation, so the
+        solver never twists the shoulder to hold a wrist angle the person didn't ask for.
+        """
+        rotation = self.hand_rotations(current_q)
         tf = {}
         for side, p in (("left", left), ("right", right)):
             m = np.eye(4)
-            m[:3, :3], m[:3, 3] = self.rotation[side], p
+            m[:3, :3], m[:3, 3] = rotation[side], p
             tf[side] = m
         q, _ = self.ik.solve_ik(tf["left"], tf["right"], current_q)
         return np.clip(q, self.lower, self.upper)
 
-    def hand_positions(self, q: np.ndarray) -> dict[str, np.ndarray]:
+    def _hands(self, q: np.ndarray):
         import pinocchio as pin
 
         model = self.ik.reduced_robot.model
         data = model.createData()
         pin.forwardKinematics(model, data, q)
         pin.updateFramePlacements(model, data)
-        return {"left": data.oMf[model.getFrameId("L_ee")].translation.copy(),
-                "right": data.oMf[model.getFrameId("R_ee")].translation.copy()}
+        return {"left": data.oMf[model.getFrameId("L_ee")], "right": data.oMf[model.getFrameId("R_ee")]}
+
+    def hand_positions(self, q: np.ndarray) -> dict[str, np.ndarray]:
+        return {s: m.translation.copy() for s, m in self._hands(q).items()}
+
+    def hand_rotations(self, q: np.ndarray) -> dict[str, np.ndarray]:
+        return {s: m.rotation.copy() for s, m in self._hands(q).items()}
 
 
 def fsm_id(iface: str) -> int:
