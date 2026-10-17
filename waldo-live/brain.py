@@ -223,6 +223,9 @@ class Brain:
                 messages.append({"role": "user", "content": results})
                 if notes := self.drain_notes():
                     messages.append({"role": "system", "content": notes})
+        except Exception as ex:
+            print(f"task failed: {type(ex).__name__}: {ex}")
+            await apublish(self.http, {"type": "task_ended", "task": task, "result": f"error: {ex}"[:500]})
         finally:
             self.running = None
 
