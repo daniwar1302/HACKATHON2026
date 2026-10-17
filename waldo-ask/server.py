@@ -168,7 +168,7 @@ async def ask_human(
     task: str,
     situation: str,
     question: str,
-    camera: str = "head_camera",
+    camera: str = "waldo_webcam",
     wait_seconds: float = 60,
     force_human: bool = False,
 ) -> dict:
