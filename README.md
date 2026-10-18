@@ -9,6 +9,8 @@ products with AI agents as their users, from MCP tools to communication infrastr
 that idea to robotics: agents can operate hardware, watch for problems, call a human for help,
 and remember what worked.
 
+![Waldo moving its arms in the lab — excerpt from the original video](docs/assets/waldo-lab.gif)
+
 **Waldo gives an AI agent eyes that react in a tenth of a second, a phone number to call you when it's unsure,
 and a memory so it needs you less each time.**
 
