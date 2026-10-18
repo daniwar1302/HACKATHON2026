@@ -30,6 +30,8 @@ arm_server) → pelvis frame. Depth is fetched on demand (newest frame only, cac
 background; ~1–4 ms per call once a frame is cached. Math and self-check in `vision.py` (`python vision.py`).
 Michael's measured `camera-pose-head.json` can replace the URDF mount once it's verified against the overlay.
 
+Onboard VLM grounding (Cosmos-Reason2-2B on Waldo's GPU) lives in `vlm_point.py`; the full VLM → hand-task guide is [`docs/vlm-hand-tasks.md`](../docs/vlm-hand-tasks.md).
+
 **Codifying what works into routines:**
 
 | Tool | What it does |
