@@ -153,3 +153,9 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
 - Arm motion (mirroring, dancing) runs only with the robot balancing, on the gantry, with a spotter on the controller (L1+A).
 - "Person within reach" shots and tests happen only with the arm parked or its motors off.
 - Waldo is shared: check with the bay owner before using the robot.
+
+## G1 agent stack (humanoid arms as agent skills)
+
+Agents running physical work cells on the Unitree G1 through MCP: machine tending + QC, a hardware-in-the-loop
+firmware update, overpressure interlocks, receipts. Claude ran both cells from plain-English work orders and matched
+ground truth. One-command demos and numbers: [docs/g1-agent-stack.md](docs/g1-agent-stack.md).

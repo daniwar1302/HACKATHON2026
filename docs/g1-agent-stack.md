@@ -1,0 +1,64 @@
+# G1 agent stack: agents run physical work cells through MCP
+
+**An AI agent gets a humanoid's two arms as a set of verified skills: load the machine, read the gauge, flash the
+board, stop on overpressure, and prove what it did.** Built on a Unitree G1 with Dex1 grippers (hanging in a gantry,
+arms only) and a MuJoCo digital twin of it that speaks the robot's real protocol.
+
+## What agents need from a robot, and what we built for each
+
+| An agent is... | So it needs | Built |
+|---|---|---|
+| slow (seconds per decision) | limits watched faster than it can poll | `guard(gauge, above, then_task)`: a background interlock, ~0.2 s reaction |
+| blind between calls | cheap, exact sensing | `read_light`, `read_display` (7-segment), `read_gauge`: ~50 ms each, no VLM |
+| unreliable at raw motion | skills that are planned, collision-checked and verified | `pick`, `place`, `home`, `run_task` over a MuJoCo twin + arm_server's checks |
+| new to every cell | to teach stations cheaply | `teach_control` (point at a button), `record_transfer` (one watched demonstration), `register_keepout` / `register_container` |
+| accountable to humans | proof of what it did | receipts: before/after head-camera frames + args + result for every physical action |
+
+Fixtured parts and taught moves are how production cells reach high reliability; the agent works above them, deciding,
+sensing, verifying and reacting.
+
+## Demos (one command each, in the sim)
+
+```sh
+./waldo-sim/demo.sh cell   # machine tending + QC
+./waldo-sim/demo.sh lab    # hardware-in-the-loop firmware update + guarded machine cycle
+```
+
+* **Machine tending + QC (cell):** load a raw part from the infeed fixture into the machine, press START, watch the
+  stack light, read the QC lamp, unload to the PASS or REJECT bin. Claude Code, given a plain-English work order
+  and only the MCP tools, found the lamps with `look` and processed all 3 parts: **3/3 vs ground truth**, no faults
+  (37 turns, 216 s, $0.48). [log](../waldo-sim/runs/claude_cell_run.md) · [gif](../waldo-sim/media/claude_runs_cell.gif)
+* **Test bench (lab):** a hung dev board and a faulty machine. Claude recovered the board, had the robot hold BOOT
+  and tap RESET, flashed v2 from its own shell, read the new pairing code off the 7-segment display, then ran the
+  machine with a guard armed: the guard pressed STOP at 8.3 bar, before the 9.5 bar trip.
+  [log](../waldo-sim/runs/claude_lab_run.md) · [gif](../waldo-sim/media/claude_runs_lab.gif)
+* **The agent found two design flaws we had built in:** START and STOP taught on the same hand (it refused to run
+  the cycle unguarded and asked for START on the other hand), and a blocking guard that couldn't cover a start (it
+  reported its own failed run and proposed a background guard). Both fixed; the third run passed.
+
+## Numbers (sim, ground truth)
+
+| | |
+|---|---|
+| Machine tending + QC, scripted agent over MCP, taught transfers | **15/15** parts (free pick/place without teaching: 2/9) |
+| Firmware update (hung-board recovery, BOOT+RESET, flash, read code) | **6/6** |
+| Machine tending with overpressure guard | **6/6**, every fault stopped at ~8 bar, gauge error ~0.1 bar |
+| IT desk: power-cycle router, 2FA key, start button, light switch (taught) | **20/20** |
+| Lab buttons incl. two-hand BOOT+RESET (taught) | **18/18** |
+| Teach a button by pointing (3 px noise, desk-only twin) | **12/12**, ~1.3 s each |
+| Teach a pick/place by one demonstration, replay on new seeds | **5/5 + 5/5** |
+| 7-segment reads (tight/normal box) | **23/24** |
+| Unfixtured clutter sorting (desk, big objects) | ~44%: why cells fixture parts |
+
+## On the real robot
+
+Everything goes through Michael's `arm_server` protocol (IK + path checks on the Jetson); the skills handle its
+non-blocking trajectories, heartbeat and freezes (`waldo-arms/test_real_protocol.py`). Bring-up and teaching a real
+desk: [real-cell-bringup.md](real-cell-bringup.md). The robot was offline overnight, so the stations above have not
+yet been taught on hardware.
+
+## Where things are
+
+`waldo-arms/server.py` (MCP: 37 tools), `planner.py` (grasp/place/press), `motion.py` (twin, RRT-Connect, min-jerk),
+`vision.py` (depth segmentation, camera model), `rehearse.py`; `waldo-sim/` (MuJoCo sim on the real protocol, scenes
+`cell` · `lab` · `devices` · `sort`, `teach.py`, agents and benchmarks, `demo.sh`).
