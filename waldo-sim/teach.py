@@ -289,7 +289,7 @@ CHECKS = {   # task -> did it work, from the sim's device state and the events s
     "reset_board": lambda d, ev: d["state"]["board"] == "app" and any(e.startswith("board up") for e in ev),
     "enter_bootloader": lambda d, ev: d["state"]["board"] == "boot",
     "start_cycle": lambda d, ev: d["state"]["machine"] == "running",
-    "stop_machine": lambda d, ev: d["state"]["machine"] == "stopped",
+    "stop_machine": lambda d, ev: d["state"].get("machine") in ("stopped", "done") and not any("FAULT" in e for e in ev),
     "hard_reset": lambda d, ev: "hard power off (held 4 s)" in ev and any(e.startswith("boot complete") for e in ev),
     "reseat_drive0": lambda d, ev: d["state"]["drives"][0] == "ok" and "drive0 seated: rebuilding" in ev,
     "reseat_drive1": lambda d, ev: d["state"]["drives"][1] == "ok" and "drive1 seated: rebuilding" in ev,

@@ -244,9 +244,30 @@ class Twin:
                 path = path_a[::-1] + path_b
                 if np.linalg.norm(path[0][sl] - q_start[sl]) > 1e-9:
                     path = path[::-1]
-                return self.shortcut(path, contact_ok)
+                return self.smooth(self.shortcut(path, contact_ok), contact_ok)
             A, B, pa, pb = B, A, pb, pa
         return None
+
+    def smooth(self, path, contact_ok=(), step=0.02):
+        """Round the corners of a waypoint path. Timing a polyline along its length kinks the velocity at every waypoint
+        (peak joint accelerations ~70 rad/s^2 for moves that need ~2). Densify, then repeated [1 2 1] passes (a
+        Gaussian; endpoints pinned); keep the strongest smoothing whose every sample is collision-free."""
+        P = np.asarray(path, float)
+        if len(P) < 3:
+            return path
+        dense = [P[0]]
+        for a, b in zip(P[:-1], P[1:]):
+            n = max(1, int(np.ceil(np.abs(b - a).max() / step)))
+            dense += [a + (b - a) * k / n for k in range(1, n + 1)]
+        D = np.array(dense)
+        for passes in (200, 80, 25):
+            S = D.copy()
+            for _ in range(passes):
+                S[1:-1] = 0.25 * S[:-2] + 0.5 * S[1:-1] + 0.25 * S[2:]
+            # no NEW contacts: paths often start in a tolerated contact (hanging pose by the thigh); that stays allowed
+            if all(not self.collides(q, contact_ok) or self.collides(d, contact_ok) for q, d in zip(S[1:-1], D[1:-1])):
+                return list(S)
+        return path
 
     def shortcut(self, path, contact_ok=(), rounds=60):
         path = list(path)
@@ -269,27 +290,49 @@ class Twin:
         return None
 
 
-def timed(path, max_joint_speed=1.2, dt=0.02, min_T=0.5):
-    """Waypoints -> one smooth trajectory: dense samples along the path with a single min-jerk speed profile over its
-    whole length (accelerate once, flow through every waypoint without stopping, decelerate once).
-    Returns (q list, times) for arm_server's `trajectory` command."""
+def timed(path, max_joint_speed=1.2, max_joint_accel=3.0, dt=0.02, min_T=0.5, step=0.01):
+    """Waypoints -> one smooth trajectory for arm_server's `trajectory` command: (q list, times).
+    Speed along the path is limited so every joint stays under max_joint_speed AND max_joint_accel, including through
+    the bends (sharp waypoint corners force a slow-down instead of a whip), then the speed profile is softened so
+    jerk stays low. A straight move accelerates once, cruises, decelerates once."""
     P = np.asarray(path, float)
-    seg = np.abs(np.diff(P, axis=0)).max(axis=1)              # joint-space length per segment (max-norm)
-    L = float(seg.sum())
-    if L < 1e-9:
+    if np.abs(np.diff(P, axis=0)).max(initial=0.0) < 1e-9:
         return [list(map(float, P[0])), list(map(float, P[-1]))], [0.0, min_T]
-    T = max(min_T, 1.875 * L / max_joint_speed)               # min-jerk peak speed = 1.875 x average
-    cum = np.concatenate([[0.0], np.cumsum(seg)]) / L
+    dense = [P[0]]                                            # densify: ~`step` rad per sample (max-norm)
+    for p0, p1 in zip(P[:-1], P[1:]):
+        n = max(1, int(np.ceil(np.abs(p1 - p0).max() / step)))
+        dense += [p0 + (p1 - p0) * k / n for k in range(1, n + 1)]
+    D = np.array(dense)
+    dq = np.diff(D, axis=0)
+    ds = np.abs(dq).max(axis=1)                               # path parameter s: max-norm arc length
+    keep = ds > 1e-12
+    D, dq, ds = np.vstack([D[:1], D[1:][keep]]), dq[keep], ds[keep]
+    if len(ds) == 0:
+        return [list(map(float, P[0])), list(map(float, P[-1]))], [0.0, min_T]
+    tang = dq / ds[:, None]                                   # dq/ds, max |.| = 1
+    # speed limit at each sample: joint speed, and curvature (|d2q/ds2| * sdot^2 <= half the accel budget)
+    curv = np.zeros(len(D))
+    curv[1:-1] = np.abs(np.diff(tang, axis=0)).max(axis=1) / (0.5 * (ds[:-1] + ds[1:]))
+    a_half = 0.5 * max_joint_accel
+    vlim = np.minimum(max_joint_speed, np.sqrt(a_half / np.maximum(curv, 1e-9)))
+    vlim[0] = vlim[-1] = 0.0
+    v = vlim.copy()                                           # forward / backward passes: tangential accel <= a_half
+    for i in range(1, len(v)):
+        v[i] = min(v[i], np.sqrt(v[i - 1] ** 2 + 2 * a_half * ds[i - 1]))
+    for i in range(len(v) - 2, -1, -1):
+        v[i] = min(v[i], np.sqrt(v[i + 1] ** 2 + 2 * a_half * ds[i]))
+    for _ in range(int(0.15 / step)):                         # soften the profile (S-curve-ish), never above the limits
+        v[1:-1] = np.minimum(v[1:-1], 0.25 * v[:-2] + 0.5 * v[1:-1] + 0.25 * v[2:])
+    # durations from the profile with a creep-speed floor everywhere, endpoints too: with zero end speeds a tiny
+    # 2-sample move took ds / 1e-6 seconds (a 1 mm nudge became a 2000 s trajectory)
+    v = np.maximum(v, 0.05 * max_joint_speed)
+    t = np.concatenate([[0.0], np.cumsum(2 * ds / (v[:-1] + v[1:]))])
+    T = max(min_T, float(t[-1]))
+    t = t * (T / t[-1])
     n = max(2, int(math.ceil(T / dt)) + 1)
-    qs, ts = [], []
-    for k in range(n):
-        tau = k / (n - 1)
-        u = 10 * tau ** 3 - 15 * tau ** 4 + 6 * tau ** 5          # min-jerk progress along the path
-        i = min(int(np.searchsorted(cum, u, side="right")) - 1, len(P) - 2)
-        f = 0.0 if cum[i + 1] == cum[i] else (u - cum[i]) / (cum[i + 1] - cum[i])
-        qs.append(list(map(float, P[i] + (P[i + 1] - P[i]) * f)))
-        ts.append(tau * T)
-    return qs, ts
+    ts = np.linspace(0.0, T, n)
+    qs = np.stack([np.interp(ts, t, D[:, j]) for j in range(D.shape[1])], axis=1)
+    return [list(map(float, q)) for q in qs], [float(x) for x in ts]
 
 
 def cartesian_path(twin, side, q14_now, points, R=None):

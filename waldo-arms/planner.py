@@ -431,7 +431,8 @@ class Planner:
         # up, over, down: lift until the item's bottom clears every rim, travel level, lower into the spot. The twin
         # doesn't model the held item, so a planned free path could swing it into the robot or a container.
         rim = max(hi[2], self.desk + 0.11)          # highest container rim on this desk (caddy back wall)
-        z_carry, z_drop = rim + below + 0.04, hi[2] + below + 0.025
+        shallow = hi[2] - lo[2] < 0.03                 # a fixture pocket / nest: walls guide the part, fingers stay clear
+        z_carry, z_drop = rim + below + 0.04, hi[2] + below + (0.008 if shallow else 0.025)
         Rs = [self.R[side], None] if self.R[side] is not None else [None]     # grasp orientation, else level jaws
         last = None
         for R in Rs:
@@ -450,7 +451,7 @@ class Planner:
                 # as low as reachable: a tall item stood on the container floor (dropped from above the rim it topples
                 # and rolls out), else just above the rim, else from halfway; the fingers' own clearance is the check
                 z_floor = lo[2] + below + 0.012
-                for z in ([z_floor] if z_floor < z_drop - 0.01 else []) + [z_drop, (z_drop + z_carry) / 2]:
+                for z in ([z_floor] if z_floor < z_drop - 0.01 and not shallow else []) + [z_drop, (z_drop + z_carry) / 2]:
                     try:
                         self.lin(side, [t[0], t[1], z], R, speed=0.06, contact=True)
                         break
