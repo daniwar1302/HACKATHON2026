@@ -348,7 +348,7 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
 
 ## Team
 
-- [Daniela Guerra](https://www.linkedin.com/in/danielaguerram/)
+- [Dani Guerra](https://www.linkedin.com/in/danielaguerram/)
 - [Ruth Guerra](https://www.linkedin.com/in/rguerram97/)
 - [Michael Loughran](https://www.linkedin.com/in/michaeleloughran/)
 - [Saahith Veeramaneni](https://www.linkedin.com/in/saahith-veeramaneni-960942272/)
