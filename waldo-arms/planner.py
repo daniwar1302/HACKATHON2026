@@ -249,7 +249,11 @@ class Planner:
             back = np.array([math.cos(hd), math.sin(hd), 0.0])
             for j, pitch in enumerate(self.PITCHES):
                 R = tilted_R(pitch, jaw, side)
-                grip = np.array([x, y, grip_z])
+                gz = grip_z
+                if not thin:   # fingertips reach TIP*sin(pitch) below the jaw centre: keep them above what the item stands on
+                    gz = max(gz, z - height_m / 2 + self.TIP * math.sin(math.radians(pitch)) + 0.004)
+                    gz = min(gz, z + height_m / 2 - 0.006)      # but still on the item
+                grip = np.array([x, y, gz])
                 if thin:
                     grip = grip - 0.022 * R[:, 0]                  # fingertip pads at the item, jaw centre above
                 pre = grip - 0.035 * back + np.array([0, 0, 0.07])
@@ -443,8 +447,11 @@ class Planner:
                 last = e
         else:
             raise last
-        for f, R in [(f, R) for f in (0.0, -0.3, 0.3, -0.6, 0.6) for R in Rs]:
-            t = np.array([c[0] - off[0], c[1] - off[1], z_carry])
+        # carry heights: clear of every rim first; lower if that's out of reach far from the body (the twin's keep-outs
+        # still guard other bins and their contents)
+        z_opts = [z_carry, z_carry - 0.04, hi[2] + below + 0.03]
+        for zc, f, R in [(zc, f, R) for zc in z_opts for f in (0.0, -0.3, 0.3, -0.6, 0.6) for R in Rs]:
+            t = np.array([c[0] - off[0], c[1] - off[1], zc])
             t[long_ax] += f * half
             try:
                 self.stage("carry over", lambda: self.lin(side, t, R, speed=0.12))

@@ -1,0 +1,33 @@
+{
+ "mcpServers": {
+  "waldo-arms": {
+   "command": "uv",
+   "args": [
+    "run",
+    "-q",
+    "--no-project",
+    "--with",
+    "mcp>=2.2",
+    "--with",
+    "mujoco",
+    "--with",
+    "pyzmq",
+    "--with",
+    "numpy",
+    "--with",
+    "pillow",
+    "python",
+    "/home/lain_iwakura/HACKATHON2026/waldo-arms/server.py"
+   ],
+   "env": {
+    "G1_ARM_ADDR": "tcp://127.0.0.1:17610",
+    "G1_CAM_BASE": "http://127.0.0.1:20566",
+    "G1_CAM_HOST": "127.0.0.1",
+    "G1_DEPTH_PORT": "17356",
+    "G1_CAMCFG_PORT": "17800",
+    "G1_TWIN": "returns",
+    "G1_TAUGHT_DIR": "/home/lain_iwakura/HACKATHON2026/waldo-sim/taught_returns.json"
+   }
+  }
+ }
+}

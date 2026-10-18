@@ -28,6 +28,7 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 ./waldo-sim/demo.sh it     # IT ticket: "the office internet is down"
 ./waldo-sim/demo.sh rack   # SRE page: datacenter remote hands
 ./waldo-sim/demo.sh qa     # QA agent tests an app on a physical tablet
+./waldo-sim/demo.sh returns # logistics agent triages warehouse returns
 ```
 
 * **Machine tending + QC (cell):** load a raw part from the infeed fixture into the machine, press START, watch the
@@ -47,6 +48,8 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 * **App QA on a physical device:** a test tablet running a shop app. Claude tapped through the purchase flow with the
   robot's fingertip (`tap(u, v)`, no teaching), read every screen, and filed a FAIL ticket: test card declined with
   E402, with the screen at each step and the receipt of each tap (15 turns, 108 s, $0.30).
+* **Warehouse returns:** Claude put each returned item on the scanner, read its disposition code off the console,
+  and binned it (restock / refurbish / return to vendor): 3/3 correct, each unload verified (30 turns, 184 s, $0.40).
 * **The agent found two design flaws we had built in:** START and STOP taught on the same hand (it refused to run
   the cycle unguarded and asked for START on the other hand), and a blocking guard that couldn't cover a start (it
   reported its own failed run and proposed a background guard). Both fixed; the third run passed.
@@ -59,7 +62,9 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 | Firmware update (hung-board recovery, BOOT+RESET, flash, read code) | **6/6** |
 | Machine tending with overpressure guard | **6/6**, every fault stopped at ~8 bar, gauge error ~0.1 bar |
 | IT desk: power-cycle router, 2FA key, start button, light switch (taught) | **20/20** |
-| Datacenter runbook: hard reset (hold 4 s), reseat drive 0 / 1 (taught) | **12/12** |
+| Datacenter runbook: hard reset (hold 4 s), reseat drive 0 / 1 (taught) | **15/15** |
+| Warehouse returns triage, scripted agent over MCP | **12/12** |
+| Device QA: purchase flow via `tap`, 0 / 4 / 8 px pointing noise | **25/25 · 25/25 · 24/25** |
 | Lab buttons incl. two-hand BOOT+RESET (taught) | **18/18** |
 | Teach a button by pointing (3 px noise, desk-only twin) | **12/12**, ~1.3 s each |
 | Teach a pick/place by one demonstration, replay on new seeds | **5/5 + 5/5** |

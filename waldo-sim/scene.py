@@ -176,7 +176,9 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             wb.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=[lx + sx, ly + sy, (desk.top_z - 0.03 + FLOOR_Z) / 2],
                         size=[0.02, 0.02, (desk.top_z - 0.03 - FLOOR_Z) / 2], rgba=[0.45, 0.32, 0.2, 1])
 
-    if devices == "tablet":
+    if devices == "returns":
+        add_returns(spec, desk, twin)
+    elif devices == "tablet":
         add_tablet(spec, desk)
     elif devices == "rack":
         add_rack(spec, desk)
@@ -345,6 +347,50 @@ def stack_light(wb, xy, top, material):
     for k, lamp in enumerate(("green", "yellow", "red")):
         b.add_geom(name=f"stack_light_{lamp}", type=cyl, size=[0.017, 0.012, 0], pos=[0, 0, 0.097 + 0.025 * k],
                    rgba=[0.04, 0.04, 0.04, 1], material=material)
+
+
+# ---- returns: warehouse returns triage (scan each returned item, bin it by its disposition code) ----
+RETURNS = {
+    "infeed": ((0.30, 0.17), "inbound tray: returned items in 3 pockets"),
+    "nest": ((0.32, -0.02), "scanner window (red glow): set an item here; the console shows its code ~1 s later"),
+    "console": ((0.40, 0.05), "scanner console: 4-digit display (b1 restock, b2 refurbish, b3 return to vendor) + LED"),
+    "restock_bin": ((0.45, 0.17), "green bin: restock"),
+    "refurb_bin": ((0.46, -0.07), "amber bin: refurbish"),
+    "rma_bin": ((0.33, -0.21), "red bin: return to vendor (RMA)"),
+}
+RETURN_ITEMS = {f"part{k}": ("box", (0.017, 0.017, 0.0225), 0.08, c, "item")
+                for k, c in enumerate([(0.75, 0.55, 0.3, 1), (0.3, 0.45, 0.75, 1), (0.85, 0.85, 0.82, 1)])}
+
+
+def add_returns(spec, desk: "Desk", twin: bool = False):
+    wb, top = spec.worldbody, desk.top_z
+    g = glow(spec)
+    box = mujoco.mjtGeom.mjGEOM_BOX
+    nocol = dict(contype=0, conaffinity=0)
+    (ix, iy), _ = RETURNS["infeed"]
+    inf = wb.add_body(name="infeed", pos=[ix, iy, top])
+    inf.add_geom(type=box, size=[0.05, 0.075, 0.003], pos=[0.015, -0.005, 0.003], rgba=[0.35, 0.3, 0.25, 1])
+    if twin:
+        for x, y in INFEED_SLOTS:
+            inf.add_geom(type=box, size=[0.019, 0.019, 0.0225], pos=[x - ix, y - iy, 0.006 + 0.0225])
+    _tray(wb, "nest", RETURNS["nest"][0], top, 0.060, 0.003, [0.2, 0.2, 0.22, 1], floor=0.010)   # a flat scan plate, low lip
+    (nx, ny), _ = RETURNS["nest"]
+    wb.add_geom(name="scan_window", type=box, size=[0.012, 0.02, 0.0004], pos=[nx, ny, top + 0.0105],
+                rgba=[0.5, 0.02, 0.02, 1], material=g, **nocol)
+    _tray(wb, "restock_bin", RETURNS["restock_bin"][0], top, 0.09, 0.045, [0.15, 0.5, 0.25, 1])
+    _tray(wb, "refurb_bin", RETURNS["refurb_bin"][0], top, 0.09, 0.045, [0.85, 0.55, 0.1, 1])
+    _tray(wb, "rma_bin", RETURNS["rma_bin"][0], top, 0.09, 0.045, [0.65, 0.18, 0.15, 1])
+    (cx, cy), _ = RETURNS["console"]
+    c = wb.add_body(name="console", pos=[cx, cy, top + 0.012])
+    c.add_geom(type=box, size=[0.03, 0.045, 0.012], rgba=[0.15, 0.15, 0.17, 1])
+    c.add_geom(type=box, size=[0.014, 0.036, 0.0006], pos=[-0.004, 0, 0.0125], rgba=[0.03, 0.03, 0.03, 1], **nocol)
+    for dgt in range(4):
+        dy = 0.0255 - dgt * 0.017
+        for sname, ((u, v), horiz) in seg_layout().items():
+            px, py = -0.004 + v * DIGIT_H, dy - u * DIGIT_W
+            size = [0.0012, DIGIT_W * 0.38, 0.0004] if horiz else [DIGIT_H * 0.2, 0.0012, 0.0004]
+            c.add_geom(name=f"console_seg{dgt}{sname}", type=box, size=size, pos=[px, py, 0.0132], rgba=[0.05, 0.01, 0.01, 1], material=g, **nocol)
+    c.add_geom(name="console_led", type=box, size=[0.004, 0.004, 0.002], pos=[0.022, 0, 0.012], rgba=[0.04, 0.04, 0.04, 1], material=g, **nocol)
 
 
 # ---- tablet: real-device app QA (a test tablet flat on the desk; taps are fingertip contacts on the glass) ----

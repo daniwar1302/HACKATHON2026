@@ -530,12 +530,69 @@ class TabletDevices:
         return out
 
 
+class ReturnsDevices:
+    """Returns triage: an item resting in the scanner window for 1 s is scanned; the console shows its disposition
+    (b1 restock, b2 refurbish, b3 return to vendor) and the LED turns green; empty window: '----', LED off."""
+    SCAN_S = 1.0
+    CODES = {1: "restock", 2: "refurb", 3: "rma"}
+
+    def __init__(self, m, d, items):
+        self.m, self.d, self.items = m, d, items
+        self.nest = m.body("nest").id
+        self.g = {"led": m.geom("console_led").id, "seg": {(k, s): m.geom(f"console_seg{k}{s}").id for k in range(4) for s in "abcdefg"}}
+        self.bodies = {b for b in range(m.nbody) if m.body(b).name in ("console", "infeed")}
+        self.seed = 0
+        self.reset()
+
+    def reset(self):
+        rng = np.random.default_rng(self.seed)
+        self.code = {n: int(c) for n, c in zip(self.items, rng.permutation([1, 2, 3]))}   # every bin gets one item
+        self.history, self.presses, self.since, self.scanned = [], {}, None, None
+        self.shown = None
+        self.state = self.read()
+
+    def in_nest(self):
+        c = self.d.xpos[self.nest]
+        for n, b in self.items.items():
+            p = self.d.xpos[b]
+            if np.hypot(*(p[:2] - c[:2])) < 0.02 and p[2] < c[2] + 0.05:
+                return n
+        return None
+
+    def read(self):
+        return {"part_in_nest": self.in_nest(), "scanned": self.scanned,
+                "display": f" b{self.code[self.scanned]} " if self.scanned else "----"}
+
+    def update(self):
+        t, n = self.d.time, self.in_nest()
+        if n is None:
+            self.since, self.scanned = None, None
+        elif self.scanned != n:
+            if self.since is None or self.since[0] != n:
+                self.since = (n, t)
+            elif t - self.since[1] >= self.SCAN_S:
+                self.scanned = n
+                self.history.append((round(t, 2), f"scanned {n}: b{self.code[n]} ({self.CODES[self.code[n]]})"))
+        self.state = self.read()
+        key = self.state["display"]
+        if key != self.shown:
+            self.shown = key
+            rgba = self.m.geom_rgba
+            rgba[self.g["led"]] = LabDevices.GREEN if self.scanned else LabDevices.OFF
+            for k, ch in enumerate(key):
+                for sn in "abcdefg":
+                    rgba[self.g["seg"][(k, sn)]] = LabDevices.SEG_ON if sn in scene.SEG[ch] else LabDevices.SEG_OFF
+
+    def targets(self):
+        return {}
+
+
 class Sim:
     def __init__(self, speed: float, desk: scene.Desk, item_set: str = "big", kind: str = "sort"):
         self.desk, self.item_set, self.kind = desk, item_set, kind
-        self.item_defs = scene.CELL_PARTS if kind == "cell" else scene.ITEMS
+        self.item_defs = scene.CELL_PARTS if kind == "cell" else scene.RETURN_ITEMS if kind == "returns" else scene.ITEMS
         self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab", "rack", "tablet") else
-                  scene.build(desk, items=scene.CELL_PARTS, containers={}, devices="cell") if kind == "cell" else scene.build(desk))
+                  scene.build(desk, items=self.item_defs, containers={}, devices=kind) if kind in ("cell", "returns") else scene.build(desk))
         self.d = mujoco.MjData(self.m)
         self.speed = speed
         m = self.m
@@ -552,11 +609,13 @@ class Sim:
         self.items = {} if kind in ("devices", "lab", "rack", "tablet") else {n: scene.item_body(m, n) for n in self.item_defs}
         self.dev = (Devices(m, self.d) if kind == "devices" else LabDevices(m, self.d) if kind == "lab" else
                     CellDevices(m, self.d, self.items) if kind == "cell" else RackDevices(m, self.d) if kind == "rack" else
-                    TabletDevices(m, self.d) if kind == "tablet" else None)
+                    TabletDevices(m, self.d) if kind == "tablet" else
+                    ReturnsDevices(m, self.d, self.items) if kind == "returns" else None)
         self.item_qadr = {n: m.jnt_qposadr[m.body_jntadr[b]] for n, b in self.items.items()}
         self.item_dadr = {n: m.jnt_dofadr[m.body_jntadr[b]] for n, b in self.items.items()}
         self.containers = ({} if kind in ("devices", "lab", "rack", "tablet") else {n: m.body(n).id for n in ("nest", "pass_bin", "reject_bin")}
-                           if kind == "cell" else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS})
+                           if kind == "cell" else {n: m.body(n).id for n in ("nest", "restock_bin", "refurb_bin", "rma_bin")}
+                           if kind == "returns" else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS})
         self.static_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] == 0 or m.geom_bodyid[g] in self.containers.values()}
         mujoco.mj_forward(m, self.d)
         self.box = {n: self._aabb(b) for n, b in self.containers.items()}
@@ -631,13 +690,15 @@ class Sim:
             for a in self.fing_q[s]:
                 d.qpos[a] = FINGER[1]
         names = list(self.item_defs) if self.items else []
-        pool = (scene.ITEM_SETS.get(self.item_set) or names) if names and self.kind != "cell" else names
-        chosen = list(rng.choice(pool, size=min(n_items or len(pool), len(pool)), replace=False)) if self.kind != "cell" else list(names)
+        fixtured = self.kind in ("cell", "returns")
+        pool = (scene.ITEM_SETS.get(self.item_set) or names) if names and not fixtured else names
+        chosen = list(rng.choice(pool, size=min(n_items or len(pool), len(pool)), replace=False)) if not fixtured else list(names)
         placed = []
-        if self.kind == "cell":              # fixtured: each part stands in its infeed pocket (+-2 mm)
+        if fixtured:                         # each part stands in its infeed pocket (+-2 mm)
             for n, (x, y) in zip(names, scene.INFEED_SLOTS):
                 qa = self.item_qadr[n]
-                d.qpos[qa:qa + 3] = [x + rng.uniform(-0.002, 0.002), y + rng.uniform(-0.002, 0.002), self.desk.top_z + 0.006 + 0.0255]
+                half_h = self.item_defs[n][1][-1]
+                d.qpos[qa:qa + 3] = [x + rng.uniform(-0.002, 0.002), y + rng.uniform(-0.002, 0.002), self.desk.top_z + 0.006 + half_h + 0.0005]
                 d.qpos[qa + 3:qa + 7] = [1, 0, 0, 0]
             names = []
         for n in names:
@@ -1013,6 +1074,7 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
                  {n: note for n, (_p, note) in scene.CELL.items()} if sim.kind == "cell" else
                  {n: note for n, (_p, note) in scene.RACK.items()} if sim.kind == "rack" else
                  {n: note for n, (_p, note) in scene.TABLET.items()} if sim.kind == "tablet" else
+                 {n: note for n, (_p, note) in scene.RETURNS.items()} if sim.kind == "returns" else
                  {n: note for n, (_k, _p, note) in scene.DEVICES.items()})
         return {"scene": sim.kind, "state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
                 "targets": sim.dev.targets(), "time": round(sim.d.time, 2), "devices": notes}
@@ -1054,7 +1116,7 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         return {"objects": sim.objects(), "desk_top_z": sim.desk.top_z,
                 "containers": {n: {"category": c[3], "box_min": sim.box[n][0].round(3).tolist(), "box_max": sim.box[n][1].round(3).tolist(),
                                    "drop_xy": sim.drop[n][:2], "drop_clear_m": sim.drop[n][2]}
-                               for n, c in {**scene.CONTAINERS, **{k: (None, None, None, k) for k in ("nest", "pass_bin", "reject_bin")}}.items()
+                               for n, c in {**scene.CONTAINERS, **{k: (None, None, None, k) for k in ("nest", "pass_bin", "reject_bin", "restock_bin", "refurb_bin", "rma_bin")}}.items()
                                if n in sim.box}}
     if cmd == "sim_point":
         # Oracle pointer: the item's top-centre projected into the head image, with VLM-like pixel noise.
@@ -1081,7 +1143,7 @@ def main():
     ap.add_argument("--desk-top", type=float, default=scene.Desk.top_z, help="desk top z in the pelvis frame (m)")
     ap.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer window (watch it live)")
     ap.add_argument("--items", default="big", choices=sorted(scene.ITEM_SETS), help="item set desks are drawn from")
-    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab", "cell", "rack", "tablet"],
+    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab", "cell", "rack", "tablet", "returns"],
                     help="desk sorting, IT switches/buttons, or lab (dev board + machine tending)")
     ap.add_argument("--port-offset", type=int, default=0, help="add to every port (run several sims side by side)")
     a = ap.parse_args()

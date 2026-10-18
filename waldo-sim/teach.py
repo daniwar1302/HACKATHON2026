@@ -174,16 +174,16 @@ def replay(arm, log):
         arm(cmd, **kw)
 
 
-def teach_transfers(arm, path, tries=6):
-    """Cell: load_slot{k} (infeed pocket k -> nest, then rest) and unload_pass / unload_reject (nest -> bin, rest).
+def teach_transfers(arm, path, kind="cell", dests=("pass", "reject"), tries=6):
+    """Fixtured cell: load_slot{k} (infeed pocket k -> nest, then rest) and unload_<dest> (nest -> <dest>_bin, rest).
     Each: plan with the cell twin (fixture parts as obstacles), run it in the sim from a snapshot, keep the first whose
     part really ends where it should, record its commands."""
     import scene
     from rehearse import Recorder
-    p = Planner(arm, arm("sim_objects")["desk_top_z"], scene_kind="cell")
+    p = Planner(arm, arm("sim_objects")["desk_top_z"], scene_kind=kind)
     cont = arm("sim_objects")["containers"]
     # finished parts stand in the bins taller than the walls: plan 6 cm above the rims (a load swept one aside)
-    p.twin.set_keepouts([(cont[b]["box_min"], cont[b]["box_max"][:2] + [cont[b]["box_max"][2] + 0.06]) for b in ("pass_bin", "reject_bin")])
+    p.twin.set_keepouts([(cont[f"{b}_bin"]["box_min"], cont[f"{b}_bin"]["box_max"][:2] + [cont[f"{b}_bin"]["box_max"][2] + 0.06]) for b in dests])
     taught = json.loads(path.read_text()) if path.exists() else {}
     arm("sim_reset", seed=0)
     arm("enable")
@@ -219,17 +219,20 @@ def teach_transfers(arm, path, tries=6):
     for k, part in enumerate(("part0", "part1", "part2")):
         def load(side, part=part):
             o = arm("sim_objects")["objects"][part]
-            r = p.pick_item(np.array(o["xyz"]), 0.0, height_m=o["height_mm"] / 1000, prefer_side=side, round_item=True,
-                            width_m=o["width_mm"] / 1000)
+            r = p.pick_item(np.array(o["xyz"]), o["grip_jaw_deg"], height_m=o["height_mm"] / 1000, prefer_side=side,
+                            round_item=kind == "cell", width_m=o["width_mm"] / 1000)
             p.place(r["side"], cont["nest"]["box_min"], cont["nest"]["box_max"], at=cont["nest"]["drop_xy"])
             p.home(r["side"])
         if search(f"load_slot{k}", load, in_nest(part), "cell_rest") and k == 0:
             arm("sim_save", name="cell_loaded")          # part0 sits in the nest: teach the unloads from here
-    for verdict in ("pass", "reject"):
-        def unload(side, verdict=verdict):
+    for verdict in dests:
+        turn = [0]
+        def unload(side, verdict=verdict, turn=turn):
             o = arm("sim_objects")["objects"]["part0"]
-            r = p.pick_item(np.array(o["xyz"]), 0.0, height_m=o["height_mm"] / 1000, prefer_side=side, round_item=True,
-                            width_m=o["width_mm"] / 1000)
+            jaw = o["grip_jaw_deg"] + 90 * (turn[0] // 3 % 2)      # square boxes grip across either pair of faces
+            turn[0] += 1
+            r = p.pick_item(np.array(o["xyz"]), jaw, height_m=o["height_mm"] / 1000, prefer_side=side,
+                            round_item=kind == "cell", width_m=o["width_mm"] / 1000)
             b = cont[f"{verdict}_bin"]
             p.place(r["side"], b["box_min"], b["box_max"], at=b["drop_xy"])
             p.home(r["side"])
@@ -267,7 +270,7 @@ RACK_TASKS = {      # the runbook: Er01 -> hard_reset; Er42 -> reseat the drive 
     "reseat_drive0": [("drive0_latch", 1.0, "tap"), ("drive0_caddy", 3.0, "tap")],
     "reseat_drive1": [("drive1_latch", 1.0, "tap"), ("drive1_caddy", 3.0, "tap")],
 }
-SCENES = {"rack": (RACK_CONTROLS, RACK_TASKS, HERE / "taught_rack.json"), "devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json"),
+SCENES = {"returns": ({}, {}, HERE / "taught_returns.json"), "rack": (RACK_CONTROLS, RACK_TASKS, HERE / "taught_rack.json"), "devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json"),
           "cell": (CELL_CONTROLS, CELL_TASKS, HERE / "taught_cell.json")}
 ALL_TASKS = {**TASKS, **LAB_TASKS, **RACK_TASKS}
 
@@ -315,8 +318,8 @@ def main():
         twin.set_keepouts([(cont[b]["box_min"], cont[b]["box_max"][:2] + [cont[b]["box_max"][2] + 0.06]) for b in ("pass_bin", "reject_bin")])
     p = Planner(arm, arm("sim_objects")["desk_top_z"], twin=False)
     if a.mode == "teach":
-        if kind == "cell" and a.task in (None, "transfers"):
-            teach_transfers(arm, path)
+        if kind in ("cell", "returns") and a.task in (None, "transfers"):
+            teach_transfers(arm, path, kind, ("pass", "reject") if kind == "cell" else ("restock", "refurb", "rma"))
         if a.task != "transfers":
             teach(arm, twin, p, controls, path, [a.task] if a.task else None)
         return
