@@ -962,7 +962,8 @@ def main():
     poller = zmq.Poller()
     poller.register(arm_sock, zmq.POLLIN)
     poller.register(cfg_sock, zmq.POLLIN)
-    last_depth = 0.0
+    last_depth = last_idle = 0.0
+    last_idle = time.monotonic()
     while True:
         socks = dict(poller.poll(5))
         if cfg_sock in socks:
@@ -984,7 +985,16 @@ def main():
         if time.monotonic() - last_depth > 1 / 15:
             last_depth = time.monotonic()
             pub.send((np.clip(render("head", depth=True), 0, 65.0) * 1000).astype(np.uint16).tobytes())
-        sim.step()
+        if a.speed > 0:          # idle: keep sim time with the wall clock (machines run, LEDs boot while agents think)
+            now = time.monotonic()
+            n = min(100, int((now - last_idle) * a.speed / sim.m.opt.timestep))
+            if n:
+                sim.step(n)
+                last_idle += n * sim.m.opt.timestep / a.speed
+            if now - last_idle > 0.5:
+                last_idle = now
+        else:
+            sim.step()
 
 
 if __name__ == "__main__":

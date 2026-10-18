@@ -112,7 +112,8 @@ def status() -> dict:
     r = arm("state", timeout_s=5)
     a = r["arm"]
     grip = lambda g: None if not g else {k: g.get(k) for k in ("q", "phase", "tau", "holding") if k in g}
-    return {"fsm": a["fsm"], "arm_capable_fsm": a["fsm"] in (500, 501, 801), "enabled": a["enabled"],
+    fsm_id = a["fsm"][0] if isinstance(a["fsm"], (list, tuple)) else a["fsm"]     # arm_server reports [id, mode]
+    return {"fsm": a["fsm"], "arm_capable_fsm": fsm_id in (500, 501, 801), "enabled": a["enabled"],
             "frozen": a["frozen"], "freeze_reason": a["freeze_reason"], "moving": a["moving"],
             "left_hand_xyz": (r.get("fk") or {}).get("grasp_xyz"), "right_hand_xyz": (r.get("fk_right") or {}).get("grasp_xyz"),
             "left_gripper": grip(r.get("gripper")), "right_gripper": grip(r.get("gripper_right")),

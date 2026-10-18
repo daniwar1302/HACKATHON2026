@@ -69,6 +69,18 @@ gripper opens only item width + 25 mm (fully open fingers straddled the nest wal
 behind the desk edge (it parked the hands 7 mm under it, so every path out of rest grazed the desk). Recording:
 `media/cell_agent_demo.gif`.
 
+**An LLM agent runs it** (`runs/claude_cell_run.md`, `media/claude_runs_cell.gif`): Claude Code headless, given a
+plain-English work order and only the waldo-arms MCP server, found the lamps with `look`, then for each part loaded
+it, confirmed it was seated, started the cycle, polled the stack light and QC lamp with `read_light`, unloaded to the
+matching bin and checked with `look`: **3/3 correct vs ground truth**, no faults, 37 turns, 216 s, $0.48. It also
+flagged a real bug (status called FSM 500 not arm-capable; fixed).
+```sh
+MUJOCO_GL=glfw uv run --with mujoco --with pyzmq --with pillow --with numpy waldo-sim/sim_server.py --speed 1 --scene cell --port-offset 1000
+cd waldo-sim && claude -p "$(cat work_order.txt)" --mcp-config mcp_cell.json --strict-mcp-config --allowedTools mcp__waldo-arms
+```
+(`mcp_cell.json` has this laptop's absolute paths; edit them.) In real-time mode the sim's clock now keeps running
+while agents think, so machines finish cycles and routers boot between tool calls.
+
 The others: `--scene sort` (desk + containers + items), `--scene devices` (IT desk: power strip, router, 2FA key,
 start button, light switch), `--scene lab`:
 
