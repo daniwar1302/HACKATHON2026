@@ -567,10 +567,15 @@ def _planner():
     return _plan
 
 
+CONTENTS_M = 0.06
+
+
 def _push_keepouts():
     """Every registered container and keep-out zone is an obstacle in the planner's twin."""
     if _plan is not None and _plan.twin is not None:
-        _plan.twin.set_keepouts([(v["box_min"], v["box_max"]) for v in _stations().values()])
+        # containers hold things that stick up past the rim: route 6 cm above it (keep-outs are taken as given)
+        _plan.twin.set_keepouts([(v["box_min"], v["box_max"][:2] + [v["box_max"][2] + (0 if v.get("keepout") else CONTENTS_M)])
+                                 for v in _stations().values()])
 
 
 def _object_at(u, v, scale, box=None):

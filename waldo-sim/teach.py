@@ -180,6 +180,8 @@ def teach_transfers(arm, path, tries=6):
     from rehearse import Recorder
     p = Planner(arm, arm("sim_objects")["desk_top_z"], scene_kind="cell")
     cont = arm("sim_objects")["containers"]
+    # finished parts stand in the bins taller than the walls: plan 6 cm above the rims (a load swept one aside)
+    p.twin.set_keepouts([(cont[b]["box_min"], cont[b]["box_max"][:2] + [cont[b]["box_max"][2] + 0.06]) for b in ("pass_bin", "reject_bin")])
     taught = json.loads(path.read_text()) if path.exists() else {}
     arm("sim_reset", seed=0)
     arm("enable")
@@ -290,6 +292,9 @@ def main():
     controls, tasks_all, path = SCENES[kind]
     twin = Twin(arm("sim_objects")["desk_top_z"], kind=kind)
     twin.PAD = 0.002          # the sim validates every candidate; plan with a small pad
+    if kind == "cell":        # bins hold finished parts taller than their walls: keep presses 6 cm above the rims
+        cont = arm("sim_objects")["containers"]
+        twin.set_keepouts([(cont[b]["box_min"], cont[b]["box_max"][:2] + [cont[b]["box_max"][2] + 0.06]) for b in ("pass_bin", "reject_bin")])
     p = Planner(arm, arm("sim_objects")["desk_top_z"], twin=False)
     if a.mode == "teach":
         if kind == "cell" and a.task in (None, "transfers"):

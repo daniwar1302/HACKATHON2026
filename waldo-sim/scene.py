@@ -208,7 +208,7 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             gtype = {"capsule": mujoco.mjtGeom.mjGEOM_CAPSULE, "cylinder": mujoco.mjtGeom.mjGEOM_CYLINDER,
                      "upright": mujoco.mjtGeom.mjGEOM_CYLINDER, "box": mujoco.mjtGeom.mjGEOM_BOX}[kind]
             body.add_geom(name=f"{name}_geom", type=gtype, size=list(p) + [0] * (3 - len(p)), quat=quat, rgba=list(rgba),
-                          mass=mass, friction=[0.9, 0.01, 0.001], condim=4)
+                          mass=mass, friction=[0.9, 0.01, 0.001], condim=6 if kind == "upright" else 4)   # 6: rolling friction, so a dropped part settles instead of rolling forever
     if twin:     # spare boxes the planner switches on as registered keep-out zones (containers, fixtures, machines)
         for i in range(KEEPOUTS):
             spec.worldbody.add_geom(name=f"keepout{i}", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.001] * 3, pos=[-5, -5, -5 - i],
