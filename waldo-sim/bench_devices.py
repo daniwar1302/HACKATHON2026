@@ -25,8 +25,12 @@ def run(task, arm, p):
         p.press(tg[name]["point"], tg[name]["push"], **kw)
     if task == "power_cycle_router":
         do("power_strip_off_end")
+        if arm("sim_devices")["state"]["strip_on"]:
+            do("power_strip_off_end", depth=0.009)        # one retry, a little deeper
         arm("sim_wait", seconds=5)
         do("power_strip_on_end")
+        if not arm("sim_devices")["state"]["strip_on"]:
+            do("power_strip_on_end", depth=0.009)
         arm("sim_wait", seconds=4)          # let it boot
         ev = [e for t, e in arm("sim_devices")["history"] if t >= t0]
         ok = "router power OFF" in ev and "router power ON" in ev and ev.index("router power OFF") < ev.index("router power ON") \

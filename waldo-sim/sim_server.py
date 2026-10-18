@@ -84,7 +84,8 @@ class Devices:
 
     def read(self):
         q = self.d.qpos
-        return {"strip_on": bool(q[self.q["rocker"]] > 0.0), "light_on": bool(q[self.q["lever"]] > 0.0)}
+        return {"strip_on": bool(q[self.q["rocker"]] > 0.0), "light_on": bool(q[self.q["lever"]] > 0.0),
+                "rocker_rad": round(float(q[self.q["rocker"]]), 3), "lever_rad": round(float(q[self.q["lever"]]), 3)}
 
     def update(self):
         t = self.d.time
@@ -118,8 +119,9 @@ class Devices:
             b = m.body(body).id
             return (d.xpos[b] + d.xmat[b].reshape(3, 3) @ np.asarray(local, float)).round(4).tolist()
         return {
-            "power_strip_off_end": {"point": wpt("power_strip_rocker", [0, -0.012, 0.006]), "push": [0, 0, -1]},
-            "power_strip_on_end": {"point": wpt("power_strip_rocker", [0, 0.012, 0.006]), "push": [0, 0, -1]},
+            # pressing the rocker's +y end tips it to OFF, the -y end to ON (measured in the sim)
+            "power_strip_off_end": {"point": wpt("power_strip_rocker", [0, 0.012, 0.006]), "push": [0, 0, -1]},
+            "power_strip_on_end": {"point": wpt("power_strip_rocker", [0, -0.012, 0.006]), "push": [0, 0, -1]},
             "security_key_pad": {"point": wpt("security_key_pad", [0, 0, 0.0015]), "push": [0, 0, -1]},
             "start_button": {"point": wpt("start_button_cap", [0, 0, 0.006]), "push": [0, 0, -1]},
             "light_switch_lever_bottom": {"point": wpt("light_switch_lever", [-0.014, 0, -0.012]), "push": [1, 0, 0]},
@@ -158,6 +160,7 @@ class Sim:
         self.rest_z = {}
         self.enabled = self.frozen = self.moving = False
         self.freeze_reason, self.table = "", None
+        self.snapshots = {}
         self.reset(0)
 
     def _aabb(self, body):
@@ -335,7 +338,7 @@ class Sim:
                 if hit is None or hit in arm or hit in item_bodies or (self.dev and hit in self.dev.bodies):
                     continue
                 mine = b1 if b1 in arm else b2
-                if s in contact_ok and mine in self.fing_body[s] and hit == 0:
+                if s in contact_ok and "dex1" in m.body(mine).name and hit == 0:     # any gripper part may touch the desk
                     continue
                 depth = -c.dist
                 own_body = hit not in self.containers.values() and hit != 0
@@ -569,6 +572,22 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         return {"state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
                 "targets": sim.dev.targets(), "time": round(sim.d.time, 2),
                 "devices": {n: note for n, (_k, _p, note) in scene.DEVICES.items()}}
+    if cmd == "sim_save":                           # snapshot the whole world (try something, then roll back)
+        snap = {"qpos": sim.d.qpos.copy(), "qvel": sim.d.qvel.copy(), "act": sim.d.act.copy(), "ctrl": sim.d.ctrl.copy(),
+                "time": sim.d.time, "enabled": sim.enabled}
+        if sim.dev:
+            snap["dev"] = (dict(sim.dev.state), list(sim.dev.history), dict(sim.dev.presses), dict(sim.dev._pressed), sim.dev.power_on_t)
+        sim.snapshots[r.get("name", "default")] = snap
+        return {}
+    if cmd == "sim_restore":
+        snap = sim.snapshots[r.get("name", "default")]
+        sim.d.qpos[:], sim.d.qvel[:], sim.d.act[:], sim.d.ctrl[:] = snap["qpos"], snap["qvel"], snap["act"], snap["ctrl"]
+        sim.d.time, sim.enabled = snap["time"], snap["enabled"]
+        if sim.dev:
+            st, hist, pr, prd, pt = snap["dev"]
+            sim.dev.state, sim.dev.history, sim.dev.presses, sim.dev._pressed, sim.dev.power_on_t = dict(st), list(hist), dict(pr), dict(prd), pt
+        mujoco.mj_forward(sim.m, sim.d)
+        return {}
     if cmd == "sim_wait":                           # let sim time pass (e.g. "wait 5 s before powering back on")
         sim.step(int(float(r.get("seconds", 1.0)) / sim.m.opt.timestep))
         return {"time": round(sim.d.time, 2)}

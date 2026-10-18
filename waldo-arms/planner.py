@@ -321,34 +321,74 @@ class Planner:
         y = np.array([0.0, 1.0, 0.0]) if np.linalg.norm(y) < 1e-6 else y / np.linalg.norm(y)
         return np.column_stack([x, y, np.cross(x, y)])
 
+    def press_options(self, side, point, push):
+        """Push directions to try for a press: the nominal one first; for top-pressed controls also tilted versions
+        (70/60/50 deg below horizontal) coming from the hand's own shoulder, since pointing straight down in front of
+        the body is at the edge of the G1's reach. A button or rocker still registers when pushed 30-40 deg off-axis."""
+        n = np.asarray(push, float) / np.linalg.norm(push)
+        out = [n]
+        if abs(n[2]) < 0.3:                                    # a control pushed sideways (wall switch): angle down a bit
+            for tilt in (10, 20):
+                t = math.radians(tilt)
+                h = n.copy()
+                h[2] = 0
+                h /= np.linalg.norm(h)
+                out.append(np.array([h[0] * math.cos(t), h[1] * math.cos(t), -math.sin(t)]))
+        if n[2] < -0.9:                                       # a control pressed from above
+            sh = np.array([0.0, 0.15 if side == "left" else -0.15])
+            h = np.asarray(point[:2], float) - sh
+            for heading in (math.atan2(h[1], h[0]), 0.0):
+                for pitch in (70, 60, 50):
+                    pr = math.radians(pitch)
+                    out.append(np.array([math.cos(pr) * math.cos(heading), math.cos(pr) * math.sin(heading), -math.sin(pr)]))
+        return out
+
     def press(self, point, push, depth=0.006, side=None, hold_s=0.4, standoff=0.06):
-        """Press a switch / button / key at `point` (pelvis frame) by pushing the closed fingertips along `push`
-        `depth` metres past the surface, hold, and back off. Returns the side used."""
-        point, push = np.asarray(point, float), np.asarray(push, float) / np.linalg.norm(push)
+        """Press a switch / button / key at `point` (pelvis frame) with the closed fingertips: approach along a
+        feasible push direction, push `depth` m past the surface, hold, back off. Returns the side used."""
+        point = np.asarray(point, float)
         sides = [side] if side else (["left", "right"] if point[1] > 0 else ["right", "left"])
-        last = None
+        errors = []
+        screened_out = []
         for sd in sides:
-            R = self.push_R(push)
-            centre = point + push * depth - self.TIP * push
-            pre = centre - push * (depth + standoff)
-            try:
-                self.arm("enable")
-                self.arm("grasp", side=sd)                       # close the jaws: poke with the fingertips
-                self.ensure_clear(sd)
-                self.stage("to press point", lambda: self.move_free(sd, pre, R))
-                self.stage("press", lambda: self.lin(sd, centre, R, step=0.01, speed=0.08, contact=True))
-                self.arm("gripper_state", side=sd)
-                if hold_s and "sim_wait" in getattr(self, "_sim_cmds", ("sim_wait",)):
-                    try:
-                        self.arm("sim_wait", seconds=hold_s)
-                    except PlanError:
-                        pass
-                self.stage("release", lambda: self.lin(sd, pre, R, contact=True))
-                return sd
-            except PlanError as e:
-                last = f"{sd}: {e}"
-                self.recover(sd)
-        raise PlanError(last or "press failed")
+            n0 = np.asarray(push, float) / np.linalg.norm(push)
+            for dirn in self.press_options(sd, point, push) + [None]:
+                if dirn is None:            # nothing passed the twin screen: still try the best options unscreened
+                    if screened_out and not errors:
+                        dirn = screened_out[0]
+                        screened_out.clear()
+                    else:
+                        break
+                    unscreened = True
+                else:
+                    unscreened = False
+                R = self.push_R(dirn)
+                along = depth / max(0.5, float(dirn @ n0))     # tilted push: go further so the control still travels `depth`
+                centre = point + dirn * along - self.TIP * dirn
+                pre = centre - dirn * (along + standoff)
+                if self.twin is not None and not unscreened:   # screen with the twin: reachable + collision-free
+                    q = self.q14()
+                    g_pre = self.twin.ik_goals(sd, q, pre, R, n=1)
+                    if not g_pre or not self.twin.ik_goals(sd, g_pre[0], centre, R, n=1, contact_ok=(sd,)):
+                        screened_out.append(dirn)
+                        continue
+                try:
+                    self.arm("enable")
+                    self.arm("grasp", side=sd)                   # closed jaws: poke with the fingertips
+                    self.ensure_clear(sd)
+                    self.stage("to press point", lambda: self.move_free(sd, pre, R))
+                    self.stage("press", lambda: self.lin(sd, centre, R, step=0.01, speed=0.08, contact=True))
+                    if hold_s:
+                        try:
+                            self.arm("sim_wait", seconds=hold_s)   # sim only; the real robot just holds the pose
+                        except PlanError:
+                            pass
+                    self.stage("release", lambda: self.lin(sd, pre, R, contact=True))
+                    return sd
+                except PlanError as e:
+                    errors.append(f"{sd} {np.round(dirn, 2).tolist()}: {e}")
+                    self.recover(sd)
+        raise PlanError("; ".join(errors[-3:]) or "no reachable press direction")
 
     def place(self, side, box_min, box_max, drop_dz=0.07):
         """Carry the held item over the container's centre and open. Keeps the grasp orientation when reachable."""

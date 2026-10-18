@@ -46,8 +46,10 @@ class Twin:
         self.fingers = {s: {m.body(f"{s}_dex1_finger_link_{k}").id for k in (1, 2)} for s in SIDES}
         self.containers = set() if kind == "devices" else {m.body(f"{n}_model").id for n in scene.CONTAINERS}
         # devices are obstacles to plan around (they count like containers), items are ignored
+        self.touchable = set()
         if kind == "devices":
             self.containers = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in scene.DEVICES)}
+            self.touchable = set(self.containers)        # in a contact stage the gripper may touch devices (it presses them)
         self.items = set() if kind == "devices" else {scene.item_body(m, n) for n in scene.ITEMS}
         for n in ([] if kind == "devices" else scene.ITEMS):   # items: no collisions, parked apart
             b = scene.item_body(m, n)
@@ -60,6 +62,11 @@ class Twin:
         # paths put the fingertips into the desk. Open is also the conservative (widest) shape.
         self.finger_q = [m.joint(f"{s}_dex1_finger_joint_{k}").qposadr[0] for s in SIDES for k in (1, 2)]
         self.d.qpos[self.finger_q] = scene.FINGER[1]
+        self.PAD = 0.006
+        for g in range(m.ngeom):                 # static obstacles report contacts from PAD away
+            b = m.geom_bodyid[g]
+            if b == 0 or b in self.containers:
+                m.geom_margin[g] = self.PAD
         self.rng = np.random.default_rng(seed)
         mujoco.mj_forward(m, self.d)
 
@@ -87,10 +94,14 @@ class Twin:
                     continue
                 if hit in self.items:
                     continue
-                if s in contact_ok and mine in self.fingers[s] and hit == 0:
+                if s in contact_ok and "dex1" in m.body(mine).name and hit == 0:
+                    continue
+                if s in contact_ok and "dex1" in m.body(mine).name and hit in self.touchable:
                     continue
                 own = hit not in self.containers and hit != 0
-                if -c.dist >= (0.005 if own else 0.001):
+                # plan with padding, execute without: the desk/containers/devices count as hit within PAD of the arm
+                # (contacts are detected that early because those geoms carry a margin), so tracking error has room
+                if (-c.dist >= 0.005) if own else (c.dist <= self.PAD):
                     return True
         return False
 

@@ -172,6 +172,10 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
 
     if devices:
         add_devices(spec, desk)
+        # moving parts sit inside their housings; parent/child contact filtering isn't active for this URDF-based
+        # model, so without these the housing pushes the rocker/lever back to centre (switches lose their state)
+        for housing, part in DEVICE_PARTS:
+            spec.add_exclude(bodyname1=housing, bodyname2=part)
     for name, (model, (x, y), yaw, _cat) in containers.items():
         quat = [math.cos(math.radians(yaw) / 2), 0, 0, math.sin(math.radians(yaw) / 2)]
         _gso_body(spec, wb, model, name, [x, y, desk.top_z - _mesh_bottom(model) + 0.001], quat, None, free=False)
@@ -196,12 +200,14 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
 
 # ---- devices: switches and buttons an agent might need a robot to operate (all arms-only) ----
 # name -> (kind, (x, y) on the desk in the pelvis frame, note). Positions are within the measured reach.
+# Layout = the robot's comfortable reach zone (measured in the sim): controls 30-34 cm in front of the pelvis and
+# 12-25 cm to either side (not the midline, where both arms are cramped). Copy this when setting up real props.
 DEVICES = {
-    "power_strip": ("rocker", (0.30, -0.14), "router power: the strip's rocker switch (press the O end = off, I end = on)"),
-    "router": ("router", (0.40, -0.16), "router with power + internet LEDs (lit while the strip is on)"),
-    "security_key": ("button", (0.27, 0.06), "USB security key: tap the gold pad to approve 2FA"),
-    "start_button": ("big_button", (0.31, 0.20), "machine start button"),
-    "light_switch": ("toggle", (0.36, 0.04), "wall light switch on a stand, facing the robot (push the lever up = on)"),
+    "power_strip": ("rocker", (0.32, -0.30), "router power: the strip's rocker switch (press the O end = off, I end = on)"),
+    "router": ("router", (0.46, -0.20), "router with power + internet LEDs (lit while the strip is on)"),
+    "security_key": ("button", (0.31, 0.14), "USB security key: tap the gold pad to approve 2FA"),
+    "start_button": ("big_button", (0.31, 0.25), "machine start button"),
+    "light_switch": ("toggle", (0.42, 0.02), "wall light switch on a stand, facing the robot (push the lever up = on)"),
 }
 
 
@@ -251,6 +257,10 @@ def add_devices(spec, desk: "Desk"):
             lev.add_geom(name=f"{name}_lever_geom", type=box, size=[0.008, 0.009, 0.018], pos=[-0.006, 0, 0], rgba=[0.97, 0.97, 0.95, 1], mass=0.004)
             b.add_geom(name=f"{name}_lamp", type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[0.008, 0, 0], pos=[-0.002, 0, 0.075],
                        rgba=[0.25, 0.25, 0.2, 1], contype=0, conaffinity=0)   # the "light"
+
+
+DEVICE_PARTS = [("power_strip", "power_strip_rocker"), ("light_switch", "light_switch_lever"),
+                ("security_key", "security_key_pad"), ("start_button", "start_button_cap")]
 
 
 def item_body(m: mujoco.MjModel, name: str) -> int:
