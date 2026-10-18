@@ -10,7 +10,7 @@ that idea to robotics: agents can operate hardware, watch for problems, call a h
 and remember what worked.
 
 > **Live from [Mission Robotics](https://missionrobotics.ai/), San Francisco.** We accessed the [Unitree G1](https://www.unitree.com/g1/) remotely through
-> **[Tailscale](https://tailscale.com/)** and watched a live video stream from the lab while operating the robot.
+> tailscale and watched a live video stream from the lab while operating the robot.
 
 <!-- Official Inkbox mark and wordmark: https://inkbox.ai/ -->
 <table>
