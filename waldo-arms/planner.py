@@ -279,7 +279,10 @@ class Planner:
             self.home(other)
         self.ensure_clear(side)
         if self.twin is not None:
-            self.stage("to pre-grasp", lambda: self.move_free(side, g.pre, g.R))
+            try:
+                self.stage("to pre-grasp", lambda: self.move_free(side, g.pre, g.R))
+            except PlanError:      # crowded (e.g. a fixture keep-out): come in from 4 cm higher, the descent is checked too
+                self.stage("to pre-grasp", lambda: self.move_free(side, g.pre + [0, 0, 0.04], g.R))
         else:
             self.stage("over target", lambda: self.lin(side, [g.pre[0], g.pre[1], self.desk + 0.14], None))
             self.stage("approach (turning)", lambda: self.lin_turn(side, g.pre, g.R))

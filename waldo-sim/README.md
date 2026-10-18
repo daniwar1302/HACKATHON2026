@@ -60,6 +60,10 @@ exact commands; `run_task` replays them.
 | taught transfers (how production cells run) | **15/15** parts machined, QC-read and binned correctly; ~60 s sim per part |
 | free pick/place from VLM boxes (no teaching) | 2/9 |
 
+Taught on a real cell by **demonstration** instead (`bench_teach_demo.py`): the planner only knows registered
+containers/keep-outs (desk-only twin), a watched pick → place → home is recorded and kept if it worked: both
+transfers kept on the first demonstration, replays 5/5 + 5/5 on other seeds.
+
 What it took: the planner's twin must contain the fixtured parts (it was sweeping the arm through them), the
 gripper opens only item width + 25 mm (fully open fingers straddled the nest walls), and the rest pose moved 9 cm
 behind the desk edge (it parked the hands 7 mm under it, so every path out of rest grazed the desk). Recording:

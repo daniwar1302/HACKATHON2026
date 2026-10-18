@@ -102,6 +102,9 @@ def _mesh_bottom(model_dir: str) -> float:
     return float(zmin)
 
 
+KEEPOUTS = 16
+
+
 def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINERS, devices: bool | str = False,
           twin: bool = False) -> mujoco.MjModel:
     """devices: False, True / "devices" (IT desk: power strip, router, key, button, light) or "lab" (dev board,
@@ -206,6 +209,10 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
                      "upright": mujoco.mjtGeom.mjGEOM_CYLINDER, "box": mujoco.mjtGeom.mjGEOM_BOX}[kind]
             body.add_geom(name=f"{name}_geom", type=gtype, size=list(p) + [0] * (3 - len(p)), quat=quat, rgba=list(rgba),
                           mass=mass, friction=[0.9, 0.01, 0.001], condim=4)
+    if twin:     # spare boxes the planner switches on as registered keep-out zones (containers, fixtures, machines)
+        for i in range(KEEPOUTS):
+            spec.worldbody.add_geom(name=f"keepout{i}", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.001] * 3, pos=[-5, -5, -5 - i],
+                                    contype=0, conaffinity=0, rgba=[1, 0.3, 0.1, 0.3])
     return spec.compile()
 
 

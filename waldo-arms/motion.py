@@ -74,6 +74,29 @@ class Twin:
             if b == 0 or b in self.containers:
                 m.geom_margin[g] = self.PAD
         self.rng = np.random.default_rng(seed)
+        # keep-out boxes move at runtime; the world body's compile-time BVH wouldn't see them (0.03 ms per check)
+        m.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_MIDPHASE
+        mujoco.mj_forward(m, self.d)
+
+    def set_keepouts(self, boxes):
+        """Registered keep-out zones [(lo xyz, hi xyz)] become solid obstacles (the gripper may still touch them in a
+        contact stage, like the desk: picking from a fixture, lowering into a bin). Replaces the previous set."""
+        m = self.m
+        if len(boxes) > scene.KEEPOUTS:
+            raise ValueError(f"at most {scene.KEEPOUTS} keep-out zones")
+        for i in range(scene.KEEPOUTS):
+            g = m.geom(f"keepout{i}").id
+            if i < len(boxes):
+                lo, hi = np.asarray(boxes[i][0], float), np.asarray(boxes[i][1], float)
+                size = np.maximum((hi - lo) / 2, 1e-3)
+                m.geom_pos[g], m.geom_size[g] = (lo + hi) / 2, size
+                m.geom_contype[g] = m.geom_conaffinity[g] = 1
+                m.geom_margin[g] = self.PAD
+            else:
+                m.geom_pos[g], m.geom_size[g] = [-5, -5, -5 - i], [1e-3] * 3
+                m.geom_contype[g] = m.geom_conaffinity[g] = 0
+            m.geom_rbound[g] = float(np.linalg.norm(m.geom_size[g]))
+            m.geom_aabb[g] = np.concatenate([[0, 0, 0], m.geom_size[g]])
         mujoco.mj_forward(m, self.d)
 
     # ----- state -----

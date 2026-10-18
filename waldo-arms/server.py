@@ -500,6 +500,7 @@ _plan = None
 
 
 _sim = None
+_recording = None        # {"name", "log"} while record_transfer is on: what the skills send, for save_transfer
 
 
 def _is_sim() -> bool:
@@ -525,6 +526,11 @@ def _parm(cmd, **kw):
         return {"ok": True}
     if not sim:
         kw.pop("contact", None)
+    rec = _recording is not None and cmd in ("trajectory", "move_ee", "grasp", "open", "gripper", "park")
+    if rec and cmd in ("move_ee", "park"):       # Cartesian goals re-solve IK on replay; record the joints instead
+        q_before = arm("state", timeout_s=3)["arm"]["q"]
+    elif rec:
+        _recording["log"].append([cmd, json.loads(json.dumps(kw, default=float))])
     try:
         r = arm(cmd, timeout_s=120, **kw)
         if cmd == "trajectory" and not sim:
@@ -540,6 +546,10 @@ def _parm(cmd, **kw):
                     arm("freeze", reason="trajectory overran")
                     raise PlanError("trajectory overran its time; arm frozen")
                 time.sleep(0.2)
+        if rec and cmd in ("move_ee", "park"):
+            q_after = arm("state", timeout_s=3)["arm"]["q"]
+            _recording["log"].append(["trajectory", {"q": [q_before, q_after], "times": [0.0, float(kw.get("duration", 3.0))],
+                                                     "side": kw.get("side", "left"), **({"contact": True} if kw.get("contact") else {})}])
         return r
     except ToolError as e:
         raise PlanError(str(e))
@@ -552,7 +562,14 @@ def _planner():
     if _plan is None or _plan.desk != desk:
         # the twin plans around what it knows: G1_TWIN=bare (desk only, a real cell) or a sim scene (sort, cell, lab)
         _plan = Planner(_parm, desk, scene_kind=os.environ.get("G1_TWIN", "bare"))
+        _push_keepouts()
     return _plan
+
+
+def _push_keepouts():
+    """Every registered container and keep-out zone is an obstacle in the planner's twin."""
+    if _plan is not None and _plan.twin is not None:
+        _plan.twin.set_keepouts([(v["box_min"], v["box_max"]) for v in _stations().values()])
 
 
 def _object_at(u, v, scale, box=None):
@@ -596,13 +613,18 @@ def _skill(fn):
 
 @mcp.tool()
 def pick(u: float | None = None, v: float | None = None, box: list[float] | None = None, scale: str = "pixels",
-         side: str | None = None) -> dict:
+         side: str | None = None, then_place_in: str | None = None) -> dict:
     """Pick up the object under one point on the head image, or inside a box [u1, v1, u2, v2] (a VLM's bbox_2d:
-    better when objects touch). Depth gives its footprint, height and the axis to close
+    better when objects touch). then_place_in: the container it's going to next (picks the hand that reaches both). Depth gives its footprint, height and the axis to close
     the jaws across, so you only point (pixel from look, or a VLM's norm1000 point). Tries both hands, several
     grasp angles and approach pitches, with collision-free planned motion; verifies something is held.
     Returns side (use it for place), the object geometry and the grasp used. Max graspable width ~90 mm."""
     g = _object_at(u, v, scale, box)
+    if side is None and then_place_in:              # choose the hand on the destination's side: it can reach both ends
+        dest = _stations().get(then_place_in)
+        if dest is None:
+            raise ToolError(f"unknown container {then_place_in!r}; registered: {sorted(_stations())}")
+        side = "left" if (dest["box_min"][1] + dest["box_max"][1]) / 2 > 0 else "right"
     rim = None
     if g["ring"] or g["width"] > 0.09:
         if not g["ring"]:
@@ -637,6 +659,28 @@ def register_container(name: str, u: float | None = None, v: float | None = None
                 "box_max": [round(c, 3) for c in g["box_max"][:2]] + [round(rim_z if rim_z is not None else g["top_z"], 3)],
                 "drop_xy": [round(c, 3) for c in (drop_xy or g.get("point") or g["centre"])[:2]]}
     STATIONS.write_text(json.dumps(st, indent=1))
+    _push_keepouts()
+    return {name: st[name]}
+
+
+@mcp.tool()
+def register_keepout(name: str, u: float | None = None, v: float | None = None, box: list[float] | None = None,
+                     scale: str = "pixels", box_min: list[float] | None = None, box_max: list[float] | None = None,
+                     margin_m: float = 0.01) -> dict:
+    """Tell the planner about something it must route around: a fixture with parts standing in it, a machine, a
+    panel, a light tower. Point at it / box it on the head image (footprint and height from depth), or give
+    box_min / box_max (m, pelvis frame). Free moves avoid it; the gripper may still touch it while grasping from it.
+    Registered containers count automatically. Register every fixed thing in the cell before running."""
+    if box_min is not None and box_max is not None:
+        lo, hi = [float(c) for c in box_min], [float(c) for c in box_max]
+    else:
+        g = _object_at(u, v, scale, box)
+        lo, hi = g["box_min"], g["box_max"]
+    st = _stations()
+    st[name] = {"box_min": [round(c - margin_m, 3) for c in lo[:2]] + [round(lo[2], 3)],
+                "box_max": [round(c + margin_m, 3) for c in hi[:2]] + [round(hi[2] + margin_m, 3)], "keepout": True}
+    STATIONS.write_text(json.dumps(st, indent=1))
+    _push_keepouts()
     return {name: st[name]}
 
 
@@ -859,6 +903,36 @@ def save_control(name: str) -> dict:
     taught[name] = _pending.pop(name)
     f.write_text(json.dumps(taught))
     return {"saved": name, "file": str(f), "controls": sorted(taught)}
+
+
+@mcp.tool()
+def record_transfer(name: str) -> dict:
+    """Start recording a fixed transfer (e.g. infeed pocket -> machine nest) to teach it by doing it once: call home,
+    then pick / place / home as usual while a human watches; check the result (look, read_light, machine starts),
+    then save_transfer(name) to keep it, or save_transfer(name, discard=True). run_task(name) then replays exactly
+    those motions: the reliable way to run fixtured parts. Re-record if pick needed more than one try."""
+    global _recording
+    _recording = {"name": name, "log": [], "t0": time.time()}
+    return {"recording": name, "next": "home -> pick -> place -> home, check it worked, then save_transfer"}
+
+
+@mcp.tool()
+def save_transfer(name: str, discard: bool = False) -> dict:
+    """Stop recording; keep the recorded motions as taught transfer `name` (replay with run_task), or discard them."""
+    global _recording
+    rec, _recording = _recording, None
+    if rec is None or rec["name"] != name:
+        raise ToolError(f"not recording {name!r}; call record_transfer first")
+    if discard:
+        return {"discarded": name, "commands": len(rec["log"])}
+    if not any(c == "trajectory" for c, _ in rec["log"]):
+        raise ToolError("nothing moved while recording")
+    f = TAUGHT_DIR if TAUGHT_DIR.is_file() else TAUGHT_DIR / "taught_real.json"
+    taught = json.loads(f.read_text()) if f.exists() else {}
+    side = next((kw.get("side") for _, kw in rec["log"] if kw.get("side")), "left")
+    taught[name] = {"log": rec["log"], "side": side}
+    f.write_text(json.dumps(taught))
+    return {"saved": name, "commands": len(rec["log"]), "seconds": round(time.time() - rec["t0"]), "file": str(f)}
 
 
 @mcp.tool()

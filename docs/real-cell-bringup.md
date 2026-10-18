@@ -40,11 +40,18 @@ teach_control("router_off", u, v, push="down", depth_mm=6, indicator=[u_led, v_l
 * Multi-step tasks (power cycle, bootloader) are the taught controls in order: `run_task` with phases (`press` to
   hold BOOT, `tap` RESET with the other hand, `release`). Save the sequences you need in `teach.py`'s task tables.
 
-## 2b. Fixtured pick/place (machine tending, kitting)
-In the sim, transfers between fixed places (infeed pocket → machine nest → pass/reject bin) are taught once and
-replayed (15/15 vs 2/9 for free pick/place). On the real cell, teach them supervised: `pick(u, v)` → `place(...,
-container=...)` → `home`, watched, slow (`G1_JOINT_SPEED`); a tool that records a watched success as a transfer, like
-`save_control`, is the next step (not built yet). Always start tasks from `home("both")`.
+## 2b. Fixtured pick/place (machine tending, kitting): teach by demonstration
+1. Register everything fixed first, so the planner routes around it: `register_container` for the nest and bins,
+   `register_keepout` for fixtures with parts standing in them, machines, panels, light towers (point/box it, or
+   give `box_min`/`box_max`).
+2. `home("both")`, then `record_transfer("load_slot0")`, then `pick(box=..., then_place_in="nest")`,
+   `place(side, container="nest")`, `home(side)`, watched, slow.
+3. Did it work and disturb nothing? `save_transfer("load_slot0")`; else `save_transfer(..., discard=True)` and redo.
+4. From then on `run_task("load_slot0")` replays the exact joint motions (Cartesian moves are stored as joints).
+
+Sim, the same workflow with a desk-only twin: both transfers kept on the first demonstration, replays 5/5 + 5/5
+across seeds (`waldo-sim/bench_teach_demo.py`). Without the registered zones the demonstrations knocked the other
+parts over.
 
 ## 3. Register what the agent will read and fill
 * Containers: `register_container("tray", u, v, rim_z=...)` (point at the open spot to drop into; give `rim_z` if a
