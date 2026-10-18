@@ -539,6 +539,8 @@ class Bridge:
     async def _run_tool(self, s: CallSession, name: str, args: dict) -> dict:
         if s.dance and name in ("listen_for_music", "dance", "stop_dance"):
             return await s.dance.run_tool(name, args)
+        if s.dance and name == "hang_up" and s.dance.state in ("countdown", "starting", "dancing"):
+            return {"ok": False, "error": "still dancing; keep going until the song ends or the operator says stop"}
         if name == "robot_status":
             try:
                 async with self.http.get(f"{BRAIN_URL}/status", timeout=3) as resp:

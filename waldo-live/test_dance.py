@@ -82,7 +82,7 @@ async def test_listening_turns_off_auto_responses_and_asks_once_the_beat_is_stea
     d.tracker = SteadyTracker(Beat(124.0, 10.0, 0.6, 0.3))
     for _ in range(3):
         await d.tick()
-    assert d.state == "countdown" and "3, 2, 1" in s.said[-1]
+    assert d.state == "countdown" and "3, 2, 1" in s.said[-1] and "in my joints" in s.said[-1] and "BPM" not in s.said[-1]
     assert published[-1]["type"] == "dance_tempo" and published[-1]["bpm"] == 124.0
 
 
@@ -242,6 +242,21 @@ async def test_identifies_the_song_itself_when_it_can():
     import asyncio
     await asyncio.sleep(0.01)
     assert {"type": "choreo_request", "query": "Levitating Dua Lipa"} in published
+
+
+@pytest.mark.parametrize("lyric", ["I got you, moonlight, you're my starlight, stop and wait for me tonight",
+                                   "don't stop me now I'm having such a good time"])
+async def test_lyrics_containing_stop_words_do_not_stop(lyric):
+    d, s, published = make()
+    d.state = "dancing"
+    await d.on_transcript("remote", lyric)
+    assert d.state == "dancing" and not published
+
+
+async def test_voice_agent_has_no_stop_tool():
+    from dance_call import DANCE_TOOLS
+
+    assert "stop_dance" not in {t["name"] for t in DANCE_TOOLS}
 
 
 async def test_engine_stopping_ends_the_dance():

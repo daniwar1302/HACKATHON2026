@@ -66,10 +66,13 @@ def test_low_confidence_tempo_is_ignored_and_music_gone_after_silence():
     assert c.bpm is None and c.music_gone(0.0)
     c.on_tempo(tempo(), now=1.0)
     assert not c.music_gone(2.0)
-    assert c.music_gone(1.0 + 6.5)  # no fresh tempo for >6 s
-    c.on_tempo(tempo(loudness=0.0), now=8.0)
-    c.on_tempo(tempo(loudness=0.0), now=15.0)
-    assert c.music_gone(15.0)  # quiet for >6 s
+    for t in range(2, 20):  # loud music but a wobbly tempo estimate: keep dancing on the last good beat
+        c.on_tempo(tempo(confidence=0.1, loudness=0.6), now=float(t))
+    assert not c.music_gone(20.0) and c.bpm == 120
+    assert c.music_gone(19.0 + 8.5)  # the call stopped sending analysis
+    for t in range(30, 40):
+        c.on_tempo(tempo(loudness=0.0), now=float(t))
+    assert c.music_gone(39.0)  # quiet for >8 s
 
 
 def test_fresh_tempo_updates_keep_the_dance_moving():

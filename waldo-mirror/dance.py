@@ -11,7 +11,7 @@ Bus events it listens to:
     dance_stop / stop_requested / call_ended            stop: glide back, hand the arms back
 
 It publishes dance_started / dance_move / dance_stopped / dance_error. The dance ends by itself
-after --max-seconds (default 30), or when the music stops (no confident tempo for 6 s, or near-silence).
+when the music stops (8 s of quiet), or after --max-seconds (default 600) as a safety cap.
 """
 from __future__ import annotations
 
@@ -34,7 +34,8 @@ from moves import BEATS_PER_MOVE, CALM, HYPE, MOVES, fit_energy, pose, ready_pos
 BUS = "http://127.0.0.1:8770"
 EVENTS = {"dance_tempo", "dance_phrase", "dance_start", "dance_stop", "stop_requested", "call_ended", "choreo_sync"}
 MIN_CONFIDENCE = 0.2
-MUSIC_GONE_S = 6.0
+MUSIC_GONE_S = 8.0
+QUIET = 0.03  # loudness below this counts as no music
 
 
 def publish(event: dict) -> None:
@@ -83,7 +84,8 @@ class Choreo:
 
     def on_tempo(self, e: dict, now: float) -> None:
         self.loudness = float(e.get("loudness", 0.0))
-        self.quiet_since = (self.quiet_since or now) if self.loudness < 0.02 else None
+        self.quiet_since = (self.quiet_since or now) if self.loudness < QUIET else None
+        self.heard_at = now  # the call is still sending audio analysis, confident or not
         if float(e.get("confidence", 0)) < MIN_CONFIDENCE or not e.get("bpm"):
             return
         self.bpms.append(float(e["bpm"]))
@@ -105,9 +107,16 @@ class Choreo:
             self.energy = float(np.clip(energy, 0.1, 1.0))
 
     def music_gone(self, now: float) -> bool:
-        no_tempo = self.bpm is None or now - self.tempo_at > MUSIC_GONE_S
+        """The song is over: quiet for MUSIC_GONE_S, or the call stopped sending audio analysis.
+
+        A wobbly tempo estimate during loud music is not the end of the song: the last good
+        tempo keeps the beat going.
+        """
+        if self.bpm is None:
+            return True
+        no_audio = now - getattr(self, "heard_at", self.tempo_at) > MUSIC_GONE_S
         silent = self.quiet_since is not None and now - self.quiet_since > MUSIC_GONE_S
-        return no_tempo or silent
+        return no_audio or silent
 
     def beats(self, now: float) -> float:
         """Running beat count; `offset` leads the music to make up for call and motor lag."""
@@ -160,7 +169,7 @@ def main() -> None:
     p.add_argument("--max-vel", type=float, default=1.0, help="joint speed cap, rad/s (max 1.5)")
     p.add_argument("--offset", type=float, default=0.35, help="seconds to lead the music (call + motor lag)")
     p.add_argument("--iface", default="enp5s0")
-    p.add_argument("--max-seconds", type=float, default=30.0, help="each dance ends after this long")
+    p.add_argument("--max-seconds", type=float, default=600.0, help="safety cap on one dance")
     args = p.parse_args()
     if not 0.2 <= args.max_vel <= 1.5:
         raise SystemExit("--max-vel must be between 0.2 and 1.5 rad/s")

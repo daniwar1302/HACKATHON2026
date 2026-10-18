@@ -33,6 +33,7 @@ from beats import BeatTracker
 # "go Walter"... or a lone "go". Not "let's go" or "go go go" (lyrics).
 GO = re.compile(r"^\W*(?:ok(?:ay)?\W+)?go\W*$|(?<!let's )(?<!lets )\bgo\b[\s,!.]*(?:wal|wel|wol|wor|wad|val|vol|bal)\w*", re.I)
 STOP = re.compile(r"\b(stop|enough|wait|pause|that'?s it)\b", re.I)
+MAX_STOP_WORDS = 4  # a spoken stop is a short command; longer lines are lyrics
 STEADY_ESTIMATES = 3          # confident tempo readings in a row before asking to dance
 MIN_CONFIDENCE = 0.2
 RATE = 24000
@@ -51,7 +52,7 @@ You called because you want to dance. Speak in short, warm sentences.
   (from: pump, sway, wave, raise_roof, disco, circles, hands_up) and an energy from 0.1 (chill)
   to 1.0 (hype) that fits what you hear. Vary it: build up, repeat what works, go big on drops.
   Only speak when asked to.
-- If the operator says stop, call stop_dance right away.
+- Never stop the dance or hang up while dancing: the operator stops it themselves.
 - Messages starting with [robot] are updates from your body; mention them only when relevant.
 - When the operator is done, say goodbye and call hang_up.
 """
@@ -68,7 +69,6 @@ DANCE_TOOLS = [
     _fn("dance", "Choose the next 32 beats: 4 moves, 8 beats each, and an energy.",
         {"moves": {"type": "array", "items": {"type": "string", "enum": MOVE_NAMES}, "minItems": 1, "maxItems": 4},
          "energy": {"type": "number", "description": "0.1 chill .. 1.0 hype"}}),
-    _fn("stop_dance", "Stop dancing now."),
     _fn("hang_up", "End the call after saying goodbye."),
 ]
 
@@ -179,12 +179,11 @@ class DanceCall:
         if self.state == "listening" and self.steady >= STEADY_ESTIMATES:
             if self.confirm:
                 self.state = "confirming"
-                await self._say(f"Say, excited and short: you can hear the beat, about {round(self.bpm)} BPM, and to start "
+                await self._say("Say, excited and short: you can feel that song in your joints, and to start "
                                 "you need them to say 'go Waldo' (or text 'go'). Nothing else.")
             else:
                 self.state, self.go_at = "countdown", self.clock() + COUNTDOWN_S
-                await self._say(f"Say, excited and short: you hear the beat, about {round(self.bpm)} BPM, "
-                                "and you're dancing in 3, 2, 1! Nothing else.")
+                await self._say("Say exactly, excited: I can feel that song in my joints! Dancing in 3, 2, 1!")
         elif self.state == "dancing" and not self.synced and self.clock() >= self.next_phrase_at and self.bpm:
             self.phrases += 1
             talk = "You may add at most 4 excited words." if self.phrases % 3 == 0 else "Do not speak."
@@ -194,7 +193,8 @@ class DanceCall:
     async def on_transcript(self, party: str, text: str) -> None:
         if party != "remote":
             return
-        if STOP.search(text) and self.state in ("listening", "confirming", "countdown", "dancing"):
+        if (STOP.search(text) and len(text.split()) <= MAX_STOP_WORDS
+                and self.state in ("listening", "confirming", "countdown", "dancing")):
             await self.stop("operator said stop")
         elif self.state == "confirming" and GO.search(text):
             await self.go()
