@@ -745,6 +745,7 @@ class Sim:
             self.d.ctrl[i] = self.d.qpos[self.m.jnt_qposadr[self.m.actuator_trnid[i, 0]]]
 
     viewer = None          # a mujoco.viewer window, if --viewer
+    on_tick, _last_tick = None, 0.0
     _last_sync = 0.0
 
     def step(self, n=1):
@@ -755,6 +756,9 @@ class Sim:
             if self.viewer is not None and time.monotonic() - self._last_sync > 1 / 60:
                 self._last_sync = time.monotonic()
                 self.viewer.sync()
+            if self.on_tick is not None and time.monotonic() - self._last_tick > 0.05:
+                self._last_tick = time.monotonic()
+                self.on_tick()          # serve camera frames + depth mid-motion (recordings, agents looking while it moves)
 
     # ----- arms -----
     def arm_q(self, s):
@@ -1174,7 +1178,15 @@ def main():
     room.lookat[:] = [0.3, 0, -0.1]
     room.distance, room.azimuth, room.elevation = 1.4, 210, -28
 
+    hd_r = mujoco.Renderer(m, 720, 1280)          # demo recordings: a tighter 720p view of the robot at the desk
+    room_hd = mujoco.MjvCamera()
+    room_hd.lookat[:] = [0.30, 0.0, 0.02]
+    room_hd.distance, room_hd.azimuth, room_hd.elevation = 1.15, 208, -30
+
     def render(which, depth=False):
+        if which == "room_hd":
+            hd_r.update_scene(sim.d, camera=room_hd)
+            return hd_r.render()
         r = dep_r if depth else rgb_r
         r.update_scene(sim.d, camera=head if which == "head" else room)
         return r.render()
@@ -1190,9 +1202,9 @@ def main():
         def do_GET(self):
             if self.path == "/api/cameras":
                 body, ctype = json.dumps({"connected": True, "cameras": [{"id": "head_camera", "state": "live"}, {"id": "waldo_webcam", "state": "live"}]}).encode(), "application/json"
-            elif self.path in ("/frame/head_camera.jpg", "/frame/waldo_webcam.jpg"):
+            elif self.path in ("/frame/head_camera.jpg", "/frame/waldo_webcam.jpg", "/frame/room_hd.jpg"):
                 done, box = threading.Event(), {}
-                jobs.put(("head" if "head" in self.path else "room", box, done))
+                jobs.put(("head" if "head" in self.path else "room_hd" if "room_hd" in self.path else "room", box, done))
                 done.wait(5)
                 body, ctype = box.get("jpg", b""), "image/jpeg"
             else:
@@ -1214,6 +1226,21 @@ def main():
     poller = zmq.Poller()
     poller.register(arm_sock, zmq.POLLIN)
     poller.register(cfg_sock, zmq.POLLIN)
+    depth_t = [0.0]
+
+    def serve():
+        """Pending camera frames + the depth stream. Also runs from inside sim.step(), so they keep coming mid-motion."""
+        while not jobs.empty():
+            which, box, done = jobs.get()
+            buf = io.BytesIO()
+            Image.fromarray(render(which)).save(buf, "JPEG", quality=88)
+            box["jpg"] = buf.getvalue()
+            done.set()
+        if time.monotonic() - depth_t[0] > 1 / 15:
+            depth_t[0] = time.monotonic()
+            pub.send((np.clip(render("head", depth=True), 0, 65.0) * 1000).astype(np.uint16).tobytes())
+
+    sim.on_tick = serve
     last_depth = last_idle = 0.0
     last_idle = time.monotonic()
     while True:
@@ -1228,15 +1255,7 @@ def main():
             except Exception as e:
                 out = {"ok": False, "error": str(e)}
             arm_sock.send(json.dumps(out).encode())
-        while not jobs.empty():
-            which, box, done = jobs.get()
-            buf = io.BytesIO()
-            Image.fromarray(render(which)).save(buf, "JPEG", quality=88)
-            box["jpg"] = buf.getvalue()
-            done.set()
-        if time.monotonic() - last_depth > 1 / 15:
-            last_depth = time.monotonic()
-            pub.send((np.clip(render("head", depth=True), 0, 65.0) * 1000).astype(np.uint16).tobytes())
+        serve()
         if a.speed > 0:          # idle: keep sim time with the wall clock (machines run, LEDs boot while agents think)
             now = time.monotonic()
             n = min(100, int((now - last_idle) * a.speed / sim.m.opt.timestep))

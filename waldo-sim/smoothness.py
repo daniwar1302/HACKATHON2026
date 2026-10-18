@@ -33,7 +33,7 @@ def trajectories(entry):
     return out
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--efficiency" not in sys.argv:
     files = sys.argv[1:] or sorted(glob.glob("taught*.json"))
     worst = []
     for f in files:
@@ -48,3 +48,23 @@ if __name__ == "__main__":
           f"max {acc.max():.1f} rad/s^2")
     for a, f, name, k, (v, aa, j) in worst[:8]:
         print(f"  {f:18s} {name:16s} #{k}: speed {v:4.2f} rad/s  accel {aa:6.1f} rad/s^2  jerk {j:8.0f} rad/s^3")
+
+
+def efficiency(files):
+    """Path economy: joint-space distance travelled per trajectory and the widest sideways arm swing
+    (|shoulder roll| beyond the rest pose's 0.2 rad means the elbow is thrown out to the side)."""
+    import numpy as np
+    lens, rolls = [], []
+    for f in files:
+        for name, e in json.load(open(f)).items():
+            for tr in trajectories(e):
+                q = np.asarray(tr["q"], float)
+                lens.append(float(np.abs(np.diff(q, axis=0)).sum()))
+                rolls.append(float(max(np.abs(q[:, 1]).max(), np.abs(q[:, 8]).max())))
+    lens, rolls = np.array(lens), np.array(rolls)
+    print(f"joint travel per trajectory: median {np.median(lens):.1f}, total {lens.sum():.0f} rad; "
+          f"shoulder roll max {rolls.max():.2f} rad, trajectories with roll > 0.8: {(rolls > 0.8).sum()}/{len(rolls)}")
+
+
+if __name__ == "__main__" and "--efficiency" in sys.argv:
+    efficiency(sorted(glob.glob("taught*.json")))

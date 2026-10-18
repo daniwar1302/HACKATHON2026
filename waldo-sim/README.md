@@ -60,6 +60,14 @@ Each opens the real-time sim in the MuJoCo viewer, resets to the demo seed, runs
 tool call live, then the sim's ground truth to check its report against. `DEMO_NO_VIEWER=1` runs headless.
 Recordings if live isn't possible: `media/claude_runs_cell.gif`, `media/claude_runs_lab.gif`.
 
+## Recorded demos
+
+`media/demos/`: all six Claude runs recorded in the sim (720p room view + head camera, captions = the agent's own
+words and tool calls): `all_highlights.mp4` (2 min) plus `<demo>_highlights.mp4` and `<demo>_full.mp4` for `it`,
+`rack`, `qa`, `returns`, `lab`, `cell`. Re-record and re-cut: `./record_demos.sh [out_dir] [demos...]` then
+`python make_demo_videos.py <out_dir> media/demos` (pillow + ffmpeg). The sim now serves camera frames and depth
+from inside its physics loop, so recordings (and agents looking) see the arm while it moves.
+
 ## Scenes
 
 `--scene cell` is the industrial one: **machine tending + quality check**. Raw aluminium parts stand in an infeed

@@ -1089,12 +1089,13 @@ _guards: dict = {}
 
 
 @mcp.tool()
-def guard(gauge: str, above: float, then_task: str, timeout_s: float = 60.0, poll_s: float = 0.2) -> dict:
+def guard(gauge: str, above: float, then_task: str, timeout_s: float = 60.0, poll_s: float = 0.2, blind_s: float = 8.0) -> dict:
     """Interlock, armed in the background: watches a registered gauge at ~5 Hz and runs `then_task` (e.g.
     stop_machine; run arm_stop first so it's a short poke) the moment the reading goes above `above`. Returns at once
     with a guard id, so arm it BEFORE starting the machine; then start, and check guard_status(id, wait_s=...).
     Tool calls run one at a time; a guard is how a limit stays watched while you do other things. It ends when it
-    fires, after timeout_s, or once the reading has risen and fallen back to ~0 (cycle over)."""
+    fires, after timeout_s, or once the reading has risen and fallen back to ~0 (cycle over). Brief occlusions (an arm
+    passing in front of the dial) are ridden out; blind for more than blind_s, it fails safe and runs then_task."""
     if gauge not in _gauges():
         raise ToolError(f"unknown gauge {gauge!r}; registered: {sorted(_gauges())}")
     gid = f"g{len(_guards) + 1}"
@@ -1102,13 +1103,27 @@ def guard(gauge: str, above: float, then_task: str, timeout_s: float = 60.0, pol
                          "trace": [], "t0": time.monotonic()}
 
     def watch():
-        rose = False
+        rose, blind_since, over = False, None, 0
+        st["blind_s"] = 0.0
         try:
             while time.monotonic() - st["t0"] < timeout_s:
-                val = read_gauge(gauge)["value"]
+                try:
+                    val = read_gauge(gauge)["value"]
+                    blind_since = None
+                except ToolError:                      # dial occluded / frame missing: keep watching, but not forever
+                    now = time.monotonic()
+                    blind_since = blind_since or now
+                    st["blind_s"] = round(max(st["blind_s"], now - blind_since), 1)
+                    if now - blind_since > blind_s:
+                        st.update(fired=True, fail_safe=True, after_s=round(now - st["t0"], 1))
+                        run_task(then_task)
+                        break
+                    time.sleep(poll_s)
+                    continue
                 st["peak"] = val if st["peak"] is None else max(st["peak"], val)
                 st["trace"] = (st["trace"] + [round(val, 2)])[-20:]
-                if val > above:
+                over = over + 1 if val > above else 0
+                if over >= 2:                          # two readings in a row: a half-occluded dial misreads once
                     st.update(fired=True, at=round(val, 2), after_s=round(time.monotonic() - st["t0"], 1))
                     run_task(then_task)
                     break
