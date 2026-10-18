@@ -301,10 +301,10 @@ async def test_text_call_me_requests_a_command_call(monkeypatch):
 
     monkeypatch.setattr(bridge, "apublish", fake_publish)
     later = datetime.now(timezone.utc) + timedelta(seconds=5)
-    msgs = [SimpleNamespace(id=1, direction="inbound", created_at=later, remote_number="+1 (650) 452-3443", content="Waldo call me"),
+    msgs = [SimpleNamespace(id=1, direction="inbound", created_at=later, remote_number="+1 (555) 010-2030", content="Waldo call me"),
             SimpleNamespace(id=2, direction="inbound", created_at=later, remote_number="+15550000000", content="call me")]
     b = bridge.Bridge.__new__(bridge.Bridge)
-    b.http, b.active, b.operator = None, None, "+16504523443"
+    b.http, b.active, b.operator = None, None, "+15550102030"
     b.identity = SimpleNamespace(list_imessages=lambda limit: msgs)
     task = asyncio.create_task(b.imessage_loop(poll_s=0.01))
     await asyncio.sleep(0.05)
