@@ -52,6 +52,7 @@ G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs
 ./waldo-sim/demo.sh lab    # Claude recovers a hung board, flashes v2, reads its code; guarded faulty-machine cycle (~2 min)
 ./waldo-sim/demo.sh it     # "office internet is down": Claude finds the router, reads its LEDs, power-cycles, verifies (~1.5 min)
 ./waldo-sim/demo.sh rack   # SRE page: Claude reads the server's error code + drive LEDs, reseats the failed drive (~1 min)
+./waldo-sim/demo.sh qa     # app QA on a real tablet: Claude taps through checkout, files a FAIL ticket with evidence (~2 min)
 ```
 Each opens the real-time sim in the MuJoCo viewer, resets to the demo seed, runs `claude -p` on the work order
 (`work_order.txt`, `work_order_lab.txt`) with only the waldo-arms MCP server, prints the agent's reasoning and every
@@ -105,6 +106,13 @@ status and per-drive LEDs. Runbook tasks taught + replayed: 12/12. Claude on an 
 read Er42, found the red drive, reseated only that one, didn't hard-reset a merely degraded host, verified all
 green: matches ground truth (13 turns, 41 s, $0.26). Panel controls sit off the robot's midline: pressing straight
 ahead at y = 0 has no collision-free arm pose.
+
+**Device QA** (`--scene tablet`): a test tablet lies on the desk running ShopApp (screens rendered as textures with
+real text). A fingertip touching the glass is a tap at that spot; buttons switch screens; the planted bug: paying with
+test card 4242 fails with E402. New MCP skill `tap(u, v)`: point at a button, the robot presses it (planned, no
+teaching: screens change). Claude on a QA test case (`work_order_qa.txt`): tapped through home -> product -> cart ->
+checkout -> pay, every tap first try, and filed FAIL with the screen text at each step and a receipt per tap (15
+turns, 108 s, $0.30).
 
 The others: `--scene sort` (desk + containers + items), `--scene devices` (IT desk: power strip, router, 2FA key,
 start button, light switch), `--scene lab`:

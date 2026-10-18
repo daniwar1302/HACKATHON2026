@@ -36,7 +36,7 @@ class Twin:
     def __init__(self, desk_top_z: float = -0.06, seed: int = 0, kind: str = "sort"):
         # kind: sort (desk + containers + items), devices / lab (sim stations), bare (desk only: a real cell whose
         # devices the twin doesn't know; the arm_server's checks and a slow, watched first press cover the rest)
-        stations = kind in ("devices", "lab", "cell", "rack", "bare")
+        stations = kind in ("devices", "lab", "cell", "rack", "tablet", "bare")
         self.m = (scene.build(scene.Desk(top_z=desk_top_z), items={}, containers={}, devices=False if kind == "bare" else kind,
                               twin=True)
                   if stations else scene.build(scene.Desk(top_z=desk_top_z)))
@@ -53,7 +53,7 @@ class Twin:
         # devices are obstacles to plan around (they count like containers), items are ignored
         self.touchable = set()
         if stations:
-            names = {"lab": scene.LAB, "devices": scene.DEVICES, "cell": scene.CELL, "rack": scene.RACK, "bare": {}}[kind]
+            names = {"lab": scene.LAB, "devices": scene.DEVICES, "cell": scene.CELL, "rack": scene.RACK, "tablet": scene.TABLET, "bare": {}}[kind]
             self.containers = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in names)}
             self.touchable = set(self.containers)        # in a contact stage the gripper may touch devices (it presses them)
         self.items = set() if stations else {scene.item_body(m, n) for n in scene.ITEMS}

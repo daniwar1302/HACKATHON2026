@@ -1,0 +1,7 @@
+You are a QA agent. A physical test tablet lies on the desk in front of the robot (a Unitree G1's arms, waldo-arms tools), running ShopApp test build 2.3.1. Emulators passed; we need the real device checked before release.
+
+Test case "purchase with the test card": from the home screen, browse to the product, add it to the cart, open the cart, check out and pay. Expected: the payment with the test card **** 4242 succeeds.
+
+How: look at the screen (the head camera sees the tablet), tap buttons with tap(u, v) at the middle of the button you want, then look again to confirm the screen changed before the next step. If a tap doesn't change the screen, look closely and retry once. Don't guess what a screen says: read it.
+
+Report like a bug ticket: PASS or FAIL, steps taken, the screen text at each step, actual vs expected result, and the receipt ids of the taps as evidence.

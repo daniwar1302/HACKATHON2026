@@ -176,7 +176,9 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             wb.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=[lx + sx, ly + sy, (desk.top_z - 0.03 + FLOOR_Z) / 2],
                         size=[0.02, 0.02, (desk.top_z - 0.03 - FLOOR_Z) / 2], rgba=[0.45, 0.32, 0.2, 1])
 
-    if devices == "rack":
+    if devices == "tablet":
+        add_tablet(spec, desk)
+    elif devices == "rack":
         add_rack(spec, desk)
         for housing, part in RACK_PARTS:
             spec.add_exclude(bodyname1=housing, bodyname2=part)
@@ -343,6 +345,61 @@ def stack_light(wb, xy, top, material):
     for k, lamp in enumerate(("green", "yellow", "red")):
         b.add_geom(name=f"stack_light_{lamp}", type=cyl, size=[0.017, 0.012, 0], pos=[0, 0, 0.097 + 0.025 * k],
                    rgba=[0.04, 0.04, 0.04, 1], material=material)
+
+
+# ---- tablet: real-device app QA (a test tablet flat on the desk; taps are fingertip contacts on the glass) ----
+TABLET = {"tablet": ((0.37, 0.03), "test tablet running ShopApp 2.3.1: tap buttons with a fingertip; the screen is the "
+                     "app's real UI")}
+TABLET_W, TABLET_H = 0.20, 0.13          # screen size: across the image (pelvis y) x up the image (pelvis x)
+# screen -> (lines of text, [(button label, (u0, v0, u1, v1) in screen fractions, u right / v down in the image), ...])
+SCREENS = {
+    "home": (["ShopApp", "test build 2.3.1"], [("Browse", (0.04, 0.58, 0.48, 0.95)), ("Cart", (0.52, 0.58, 0.96, 0.95))]),
+    "product": (["Blue Mug", "$12.00"], [("Add to cart", (0.04, 0.58, 0.48, 0.95)), ("Back", (0.52, 0.58, 0.96, 0.95))]),
+    "cart_empty": (["Cart is empty"], [("Back", (0.52, 0.58, 0.96, 0.95))]),
+    "cart": (["Cart: 1 item", "Total $12.00"], [("Checkout", (0.04, 0.58, 0.48, 0.95)), ("Back", (0.52, 0.58, 0.96, 0.95))]),
+    "checkout": (["Card **** 4242", "Total $12.00"], [("Pay $12", (0.04, 0.58, 0.48, 0.95)), ("Back", (0.52, 0.58, 0.96, 0.95))]),
+    "error": (["Payment failed", "E402 card declined"], [("OK", (0.28, 0.58, 0.72, 0.95))]),
+}
+
+
+def _screen_png(name, path):
+    """Render one app screen (what the tablet displays) to a PNG texture."""
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = 800, 520
+    im = Image.new("RGB", (W, H), (245, 246, 250))
+    d = ImageDraw.Draw(im)
+    font = lambda n, b: ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" if b else "/usr/share/fonts/TTF/DejaVuSans.ttf", n)
+    lines, buttons = SCREENS[name]
+    bad = name == "error"
+    d.rectangle([0, 0, W, 70], fill=(200, 40, 40) if bad else (40, 90, 200))
+    d.text((20, 10), "ShopApp", font=font(44, True), fill=(255, 255, 255))
+    for i, line in enumerate(lines):
+        d.text((30, 90 + i * 75), line, font=font(64 if i == 0 else 52, i == 0), fill=(200, 30, 30) if bad else (20, 20, 30))
+    for label, (u0, v0, u1, v1) in buttons:
+        d.rounded_rectangle([u0 * W, v0 * H, u1 * W, v1 * H], 18, fill=(30, 150, 80) if label not in ("Back", "OK") else (90, 95, 110))
+        tw = d.textlength(label, font=font(52, True))
+        d.text(((u0 + u1) / 2 * W - tw / 2, (v0 + v1) / 2 * H - 32), label, font=font(52, True), fill=(255, 255, 255))
+    im.rotate(-90, expand=True).save(path)      # MuJoCo maps a box face's texture x along the face's y axis
+
+
+def add_tablet(spec, desk: "Desk"):
+    wb, top = spec.worldbody, desk.top_z
+    box = mujoco.mjtGeom.mjGEOM_BOX
+    (x, y), _ = TABLET["tablet"]
+    b = wb.add_body(name="tablet", pos=[x, y, top + 0.005])
+    b.add_geom(type=box, size=[TABLET_H / 2 + 0.012, TABLET_W / 2 + 0.012, 0.005], rgba=[0.1, 0.1, 0.12, 1])
+    b.add_geom(name="tablet_glass", type=box, size=[TABLET_H / 2, TABLET_W / 2, 0.0005], pos=[0, 0, 0.0055], rgba=[0, 0, 0, 0])
+    tex_dir = HERE / "assets" / "tablet"        # generated screen textures
+    tex_dir.mkdir(parents=True, exist_ok=True)
+    for name in SCREENS:
+        png = tex_dir / f"{name}.png"
+        _screen_png(name, png)
+        spec.add_texture(name=f"screen_{name}", type=mujoco.mjtTexture.mjTEXTURE_2D, file=str(png))
+        mat = spec.add_material(name=f"screen_{name}")
+        mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = f"screen_{name}"
+        mat.emission = 0.6
+        b.add_geom(name=f"screen_{name}", type=box, size=[TABLET_H / 2, TABLET_W / 2, 0.0002],
+                   pos=[0, 0, 0.0052 if name == "home" else -5.0], material=f"screen_{name}", contype=0, conaffinity=0)
 
 
 # ---- rack: datacenter remote hands (server front panel, power button, hot-swap drive bays) ----

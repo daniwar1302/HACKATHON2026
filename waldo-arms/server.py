@@ -728,6 +728,26 @@ def place(side: str, container: str | None = None, u: float | None = None, v: fl
 
 
 @mcp.tool()
+def tap(u: float, v: float, scale: str = "pixels", side: str | None = None, depth_mm: float = 2.0) -> dict:
+    """Tap a touchscreen (or any surface button) at a point on the head image: a quick fingertip press straight down
+    onto that spot, planned and collision-checked, no teaching needed (screens change). For device / app QA: look,
+    tap the button you see, look again. Aim at the middle of the button."""
+    cfg = _head_config()
+    h, w = cfg["image_shape"]
+    uu, vv = vision.to_pixels(float(u), float(v), scale, w, h)
+    z, _ = vision.depth_at(_depth_m(), uu, vv)
+    if z is None:
+        raise ToolError(f"no depth at ({uu:.0f}, {vv:.0f}); tap on a surface")
+    T, _ = _pelvis_from_cam()
+    point = vision.pixel_to_pelvis(uu, vv, z, cfg["color_intrinsics"], T)
+    p = _planner()
+    sd = _receipt("tap", {"u": u, "v": v}, lambda: _skill(
+        lambda: {"side": p.press(point, [0, 0, -1], depth=depth_mm / 1000, side=_side(side) if side else None, hold_s=0.15)}))
+    p.home(sd["side"])                         # out of the camera's view, so the next look sees the screen
+    return {"tapped_xyz": [round(float(c), 3) for c in point], "side": sd["side"], "ms": sd["ms"]}
+
+
+@mcp.tool()
 def home(side: str = "both") -> str:
     """Rest one or both arms low by the sides on a collision-free path (out of the camera's view and the other
     hand's way). Do this after place, and before handing control back."""

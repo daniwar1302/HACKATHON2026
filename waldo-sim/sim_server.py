@@ -453,11 +453,88 @@ class RackDevices:
         return out
 
 
+class TabletDevices:
+    """A test tablet running ShopApp: a fingertip touching the glass is a tap at that spot; buttons switch screens.
+    The planted bug: paying with the test card 4242 (which must succeed) fails with E402."""
+    FLOW = {("home", "Browse"): "product", ("home", "Cart"): "cart?", ("product", "Add to cart"): "cart+",
+            ("product", "Back"): "home", ("cart_empty", "Back"): "home", ("cart", "Checkout"): "checkout",
+            ("cart", "Back"): "home", ("checkout", "Pay $12"): "error", ("checkout", "Back"): "cart", ("error", "OK"): "cart"}
+
+    def __init__(self, m, d):
+        self.m, self.d = m, d
+        self.glass = m.geom("tablet_glass").id
+        self.body = m.body("tablet").id
+        self.scr = {n: m.geom(f"screen_{n}").id for n in scene.SCREENS}
+        self.z_on = float(m.geom_pos[self.scr["home"]][2])
+        self.bodies = {self.body}
+        self.seed = 0
+        self.reset()
+
+    def reset(self):
+        self.screen, self.cart, self.history, self.taps = "home", 0, [], 0
+        self.presses = {}
+        self._touch, self._released_t = False, -1.0
+        self._show()
+        self.state = self.read()
+
+    def read(self):
+        return {"screen": self.screen, "cart_items": self.cart, "taps": self.taps}
+
+    def _show(self):
+        for n, g in self.scr.items():
+            self.m.geom_pos[g][2] = self.z_on if n == self.screen else -5.0
+
+    def _local(self, p):
+        R = self.d.xmat[self.body].reshape(3, 3)
+        q = R.T @ (np.asarray(p) - self.d.xpos[self.body])
+        return (scene.TABLET_W / 2 - q[1]) / scene.TABLET_W, (scene.TABLET_H / 2 - q[0]) / scene.TABLET_H   # u right, v down
+
+    def update(self):
+        m, d, t = self.m, self.d, self.d.time
+        touch = None
+        for c in d.contact[:d.ncon]:
+            if self.glass in (c.geom1, c.geom2):
+                other = c.geom2 if c.geom1 == self.glass else c.geom1
+                if "dex1" in m.body(m.geom_bodyid[other]).name:
+                    touch = c.pos.copy()
+                    break
+        if touch is not None and not self._touch and t - self._released_t > 0.15:     # touch-down = a tap
+            self._tap(*self._local(touch), t)
+        if touch is None and self._touch:
+            self._released_t = t
+        self._touch = touch is not None
+        self.state = self.read()
+
+    def _tap(self, u, v, t):
+        self.taps += 1
+        hit = next((lab for lab, (u0, v0, u1, v1) in scene.SCREENS[self.screen][1] if u0 <= u <= u1 and v0 <= v <= v1), None)
+        self.history.append((round(t, 2), f"tap ({u:.2f}, {v:.2f}) on {self.screen}: {hit or 'no button'}"))
+        if hit is None:
+            return
+        nxt = self.FLOW[(self.screen, hit)]
+        if nxt == "cart?":
+            nxt = "cart" if self.cart else "cart_empty"
+        elif nxt == "cart+":
+            self.cart, nxt = self.cart + 1, "cart"
+        self.screen = nxt
+        self._show()
+
+    def targets(self):
+        """Centre of each button on the current screen (pelvis frame): for benches, not for the agent."""
+        R = self.d.xmat[self.body].reshape(3, 3)
+        out = {}
+        for lab, (u0, v0, u1, v1) in scene.SCREENS[self.screen][1]:
+            u, v = (u0 + u1) / 2, (v0 + v1) / 2
+            local = np.array([scene.TABLET_H / 2 - v * scene.TABLET_H, scene.TABLET_W / 2 - u * scene.TABLET_W, 0.006])
+            out[lab] = {"point": (self.d.xpos[self.body] + R @ local).round(4).tolist(), "push": [0, 0, -1]}
+        return out
+
+
 class Sim:
     def __init__(self, speed: float, desk: scene.Desk, item_set: str = "big", kind: str = "sort"):
         self.desk, self.item_set, self.kind = desk, item_set, kind
         self.item_defs = scene.CELL_PARTS if kind == "cell" else scene.ITEMS
-        self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab", "rack") else
+        self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab", "rack", "tablet") else
                   scene.build(desk, items=scene.CELL_PARTS, containers={}, devices="cell") if kind == "cell" else scene.build(desk))
         self.d = mujoco.MjData(self.m)
         self.speed = speed
@@ -472,12 +549,13 @@ class Sim:
         self.site = {s: m.site(f"{s}_grasp").id for s in SIDES}
         self.arm_bodies = {s: {b for b in range(m.nbody) if m.body(b).name.startswith(s) and any(
             k in m.body(b).name for k in ("shoulder", "elbow", "wrist", "dex1"))} for s in SIDES}
-        self.items = {} if kind in ("devices", "lab", "rack") else {n: scene.item_body(m, n) for n in self.item_defs}
+        self.items = {} if kind in ("devices", "lab", "rack", "tablet") else {n: scene.item_body(m, n) for n in self.item_defs}
         self.dev = (Devices(m, self.d) if kind == "devices" else LabDevices(m, self.d) if kind == "lab" else
-                    CellDevices(m, self.d, self.items) if kind == "cell" else RackDevices(m, self.d) if kind == "rack" else None)
+                    CellDevices(m, self.d, self.items) if kind == "cell" else RackDevices(m, self.d) if kind == "rack" else
+                    TabletDevices(m, self.d) if kind == "tablet" else None)
         self.item_qadr = {n: m.jnt_qposadr[m.body_jntadr[b]] for n, b in self.items.items()}
         self.item_dadr = {n: m.jnt_dofadr[m.body_jntadr[b]] for n, b in self.items.items()}
-        self.containers = ({} if kind in ("devices", "lab", "rack") else {n: m.body(n).id for n in ("nest", "pass_bin", "reject_bin")}
+        self.containers = ({} if kind in ("devices", "lab", "rack", "tablet") else {n: m.body(n).id for n in ("nest", "pass_bin", "reject_bin")}
                            if kind == "cell" else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS})
         self.static_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] == 0 or m.geom_bodyid[g] in self.containers.values()}
         mujoco.mj_forward(m, self.d)
@@ -934,6 +1012,7 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         notes = ({n: note for n, (_p, note) in scene.LAB.items()} if sim.kind == "lab" else
                  {n: note for n, (_p, note) in scene.CELL.items()} if sim.kind == "cell" else
                  {n: note for n, (_p, note) in scene.RACK.items()} if sim.kind == "rack" else
+                 {n: note for n, (_p, note) in scene.TABLET.items()} if sim.kind == "tablet" else
                  {n: note for n, (_k, _p, note) in scene.DEVICES.items()})
         return {"scene": sim.kind, "state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
                 "targets": sim.dev.targets(), "time": round(sim.d.time, 2), "devices": notes}
@@ -1002,7 +1081,7 @@ def main():
     ap.add_argument("--desk-top", type=float, default=scene.Desk.top_z, help="desk top z in the pelvis frame (m)")
     ap.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer window (watch it live)")
     ap.add_argument("--items", default="big", choices=sorted(scene.ITEM_SETS), help="item set desks are drawn from")
-    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab", "cell", "rack"],
+    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab", "cell", "rack", "tablet"],
                     help="desk sorting, IT switches/buttons, or lab (dev board + machine tending)")
     ap.add_argument("--port-offset", type=int, default=0, help="add to every port (run several sims side by side)")
     a = ap.parse_args()

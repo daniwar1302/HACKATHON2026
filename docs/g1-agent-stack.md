@@ -27,6 +27,7 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 ./waldo-sim/demo.sh lab    # hardware-in-the-loop firmware update + guarded machine cycle
 ./waldo-sim/demo.sh it     # IT ticket: "the office internet is down"
 ./waldo-sim/demo.sh rack   # SRE page: datacenter remote hands
+./waldo-sim/demo.sh qa     # QA agent tests an app on a physical tablet
 ```
 
 * **Machine tending + QC (cell):** load a raw part from the infeed fixture into the machine, press START, watch the
@@ -43,6 +44,9 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 * **SRE page (datacenter remote hands):** "storage on db-07 degraded". Claude read the server's panel (Er42), found
   the drive bay with the red LED, reseated just that drive per the runbook, and declined to hard-reset a host that
   was only degraded; verified all LEDs green (13 turns, 41 s, $0.26; ground truth: healthy).
+* **App QA on a physical device:** a test tablet running a shop app. Claude tapped through the purchase flow with the
+  robot's fingertip (`tap(u, v)`, no teaching), read every screen, and filed a FAIL ticket: test card declined with
+  E402, with the screen at each step and the receipt of each tap (15 turns, 108 s, $0.30).
 * **The agent found two design flaws we had built in:** START and STOP taught on the same hand (it refused to run
   the cycle unguarded and asked for START on the other hand), and a blocking guard that couldn't cover a start (it
   reported its own failed run and proposed a background guard). Both fixed; the third run passed.
