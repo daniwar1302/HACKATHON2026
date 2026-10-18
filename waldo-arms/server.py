@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -59,7 +60,8 @@ mcp = MCPServer("waldo-arms", instructions=(
     "under a point -> home(side). Fixed devices: list_controls, "
     "run_task(name) (e.g. power_cycle_router, enter_bootloader, start_cycle, arm_stop, stop_machine). "
     "SENSE, ~50 ms, no VLM: read_light(points), read_display(box) for 7-segment codes, read_gauge(name) for dials "
-    "(register_gauge once). Poll them to verify every action and to watch a running machine. Every physical action "
+    "(register_gauge once). Poll them to verify every action. For limits that need a fast reaction (overpressure -> "
+    "STOP), arm a guard(gauge, above, then_task) BEFORE starting (it runs in the background), then guard_status. Every physical action "
     "leaves a receipt (receipts, show_receipt: before/after frames)."))
 
 
@@ -67,8 +69,13 @@ class _Arm:
     def __init__(self):
         self.ctx = zmq.Context.instance()
         self.sock = None
+        self.lock = threading.RLock()        # guards fire from a background thread; one REQ socket, one caller at a time
 
     def __call__(self, cmd, timeout_s: float = 30, **kw):
+        with self.lock:
+            return self._call(cmd, timeout_s, **kw)
+
+    def _call(self, cmd, timeout_s, **kw):
         if self.sock is None:
             self.sock = self.ctx.socket(zmq.REQ)
             self.sock.setsockopt(zmq.LINGER, 0)
@@ -1027,6 +1034,60 @@ def read_display(box: list[float], digits: int = 4, scale: str = "pixels") -> di
 
 def _gauges() -> dict:
     return json.loads(GAUGES.read_text()) if GAUGES.exists() else {}
+
+
+_guards: dict = {}
+
+
+@mcp.tool()
+def guard(gauge: str, above: float, then_task: str, timeout_s: float = 60.0, poll_s: float = 0.2) -> dict:
+    """Interlock, armed in the background: watches a registered gauge at ~5 Hz and runs `then_task` (e.g.
+    stop_machine; run arm_stop first so it's a short poke) the moment the reading goes above `above`. Returns at once
+    with a guard id, so arm it BEFORE starting the machine; then start, and check guard_status(id, wait_s=...).
+    Tool calls run one at a time; a guard is how a limit stays watched while you do other things. It ends when it
+    fires, after timeout_s, or once the reading has risen and fallen back to ~0 (cycle over)."""
+    if gauge not in _gauges():
+        raise ToolError(f"unknown gauge {gauge!r}; registered: {sorted(_gauges())}")
+    gid = f"g{len(_guards) + 1}"
+    st = _guards[gid] = {"gauge": gauge, "above": above, "then": then_task, "fired": False, "done": False, "peak": None,
+                         "trace": [], "t0": time.monotonic()}
+
+    def watch():
+        rose = False
+        try:
+            while time.monotonic() - st["t0"] < timeout_s:
+                val = read_gauge(gauge)["value"]
+                st["peak"] = val if st["peak"] is None else max(st["peak"], val)
+                st["trace"] = (st["trace"] + [round(val, 2)])[-20:]
+                if val > above:
+                    st.update(fired=True, at=round(val, 2), after_s=round(time.monotonic() - st["t0"], 1))
+                    run_task(then_task)
+                    break
+                rose = rose or val > 0.2 * above
+                if rose and val < 0.05 * above:
+                    break
+                time.sleep(poll_s)
+        except Exception as e:                 # a guard that can't see must say so, loudly
+            st["error"] = str(e)[:200]
+        st["done"] = True
+
+    threading.Thread(target=watch, daemon=True).start()
+    return {"guard": gid, "armed": True, "watching": f"{gauge} > {above} -> {then_task}"}
+
+
+@mcp.tool()
+def guard_status(guard_id: str, wait_s: float = 0.0) -> dict:
+    """A guard's state: fired (and at what reading), peak, recent trace, done. wait_s: wait up to this long for it to
+    finish (lets time pass, e.g. while a machine cycle runs)."""
+    st = _guards.get(guard_id)
+    if st is None:
+        raise ToolError(f"unknown guard {guard_id!r}")
+    t_end = time.monotonic() + wait_s
+    while not st["done"] and time.monotonic() < t_end:
+        if _is_sim():
+            _parm("sim_wait", seconds=0.2)          # a sim advances its clock on request; let the guard read each step
+        time.sleep(0.25)
+    return {k: v for k, v in st.items() if k != "t0"}
 
 
 @mcp.tool()

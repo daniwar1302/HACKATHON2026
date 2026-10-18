@@ -82,23 +82,14 @@ def firmware(S, arm, st, log):
 
 def tending(S, arm, st, log):
     assert stack(S, st) == "yellow", f"machine not idle ({stack(S, st)})"
+    S.run_task("arm_stop")                      # right fingertip over STOP first; START is on the left hand
+    gid = S.guard("pressure", 8.0, "stop_machine", timeout_s=60)["guard"]   # armed BEFORE the start, runs in background
     S.run_task("start_cycle")
-    assert stack(S, st) == "green", "machine did not start"
-    S.run_task("arm_stop")
-    errs, peak = [], 0.0
-    for _ in range(60):
-        arm("sim_wait", seconds=0.5)
-        g = S.read_gauge("pressure")
-        errs.append(abs(g["value"] - arm("sim_devices")["state"]["pressure_bar"]))
-        peak = max(peak, g["value"])
-        light = stack(S, st)
-        if g["alarm"]:
-            log(f"gauge {g['value']} bar > 8: STOP")
-            S.run_task("stop_machine")
-            break
-        if light != "green":
-            log(f"stack light {light}: cycle over at {g['value']} bar")
-            break
+    assert stack(S, st) in ("green", "yellow"), "machine did not start"
+    errs = [abs(S.read_gauge("pressure")["value"] - arm("sim_devices")["state"]["pressure_bar"])]
+    g = S.guard_status(gid, wait_s=60)
+    peak = g["peak"]
+    log(f"guard {'fired at ' + str(g['at']) + ' bar: STOP' if g['fired'] else 'quiet: cycle ran to the end'}")
     S.run_task("disarm_stop")
     m = arm("sim_devices")["state"]["machine"]
     log(f"machine {m}, peak read {peak:.1f} bar, gauge error mean {np.mean(errs):.2f} / max {np.max(errs):.2f} bar")

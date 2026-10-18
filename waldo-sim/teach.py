@@ -37,7 +37,7 @@ CONTROLS = {
 LAB_CONTROLS = {
     "dev_boot": (0.004, pressed("dev_boot")),
     "dev_reset": (0.004, pressed("dev_reset")),
-    "machine_start": (0.009, pressed("machine_start")),
+    "machine_start": (0.009, pressed("machine_start"), "left"),   # left: the right hand stays parked over STOP
     "machine_stop": (0.009, pressed("machine_stop")),
 }
 
@@ -75,13 +75,15 @@ def teach(arm, twin, p, controls, path, only=None):
         arm("grasp", side=sd)                # poke with closed fingertips
     q0 = np.array(arm("state")["arm"]["q"], float)
     taught = json.loads(path.read_text()) if path.exists() else {}
-    for name, (depth, ok) in controls.items():
+    for name, (depth, ok, *only_side) in controls.items():
         if only and name not in only:
             continue
         t0, tried, found, verified = time.time(), 0, None, 0
         tg = arm("sim_devices")["targets"][name]
         arm("sim_save", name="teach")
         for side, dirn, approach, press in candidates(p, twin, q0, tg["point"], tg["push"], depth):
+            if only_side and side != only_side[0]:
+                continue
             tried += 1
             before = arm("sim_devices")
             try:
@@ -245,9 +247,9 @@ TASKS = {   # what an agent asks for -> taught controls (+ wait after, + phase)
 LAB_TASKS = {
     "reset_board": [("dev_reset", 1.5)],
     "enter_bootloader": [("dev_boot", 0.0, "press"), ("dev_reset", 0.3), ("dev_boot", 0.0, "release")],
-    "start_cycle": [("machine_start", 0.0)],
+    "arm_stop": [("machine_stop", 0.0, "hover")],         # park the right fingertip over STOP before starting
+    "start_cycle": [("machine_start", 0.0)],              # left hand: STOP stays covered the whole cycle
     "stop_machine": [("machine_stop", 0.0, "poke")],      # from the hover if armed (fast), else from rest
-    "arm_stop": [("machine_stop", 0.0, "hover")],         # park a fingertip over STOP while watching the gauge
     "disarm_stop": [("machine_stop", 0.0, "rest")],
 }
 CELL_CONTROLS = {k: LAB_CONTROLS[k] for k in ("machine_start", "machine_stop")}

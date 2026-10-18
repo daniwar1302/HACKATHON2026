@@ -81,6 +81,11 @@ cd waldo-sim && claude -p "$(cat work_order.txt)" --mcp-config mcp_cell.json --s
 (`mcp_cell.json` has this laptop's absolute paths; edit them.) In real-time mode the sim's clock now keeps running
 while agents think, so machines finish cycles and routers boot between tool calls.
 
+**And the hardware test bench** (`runs/claude_lab_run.md`, `media/claude_runs_lab.gif`, lab scene, hung board +
+faulty machine): over three runs Claude found two real design flaws (START and STOP taught on the same hand; a
+blocking guard can't cover a start), both fixed; run 3 flashed v2, read the code 0856, and its background guard
+stopped the faulty machine at 8.3 bar (trip 9.5), all matching ground truth.
+
 The others: `--scene sort` (desk + containers + items), `--scene devices` (IT desk: power strip, router, 2FA key,
 start button, light switch), `--scene lab`:
 
