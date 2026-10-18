@@ -11,7 +11,7 @@ Bus events it listens to:
     dance_stop / stop_requested / call_ended            stop: glide back, hand the arms back
 
 It publishes dance_started / dance_move / dance_stopped / dance_error. The dance ends by itself
-when the music stops (no confident tempo for 6 s, or near-silence).
+after --max-seconds (default 30), or when the music stops (no confident tempo for 6 s, or near-silence).
 """
 from __future__ import annotations
 
@@ -160,6 +160,7 @@ def main() -> None:
     p.add_argument("--max-vel", type=float, default=1.0, help="joint speed cap, rad/s (max 1.5)")
     p.add_argument("--offset", type=float, default=0.35, help="seconds to lead the music (call + motor lag)")
     p.add_argument("--iface", default="enp5s0")
+    p.add_argument("--max-seconds", type=float, default=30.0, help="each dance ends after this long")
     args = p.parse_args()
     if not 0.2 <= args.max_vel <= 1.5:
         raise SystemExit("--max-vel must be between 0.2 and 1.5 rad/s")
@@ -170,7 +171,7 @@ def main() -> None:
     events: queue.Queue = queue.Queue()
     threading.Thread(target=listen, args=(events, stop), daemon=True).start()
     choreo = Choreo(args.max_vel, args.offset)
-    arms, dancing, last_move, last_print = None, False, None, 0.0
+    arms, dancing, last_move, last_print, started_at = None, False, None, 0.0, 0.0
     print(f"dance engine armed ({'DRY RUN' if args.dry_run else 'LIVE'}, {args.max_vel} rad/s); waiting for dance_start", flush=True)
 
     def finish(reason: str) -> None:
@@ -208,7 +209,7 @@ def main() -> None:
                         arms.engage()
                         arms.set_target(ready_pose())
                     choreo.reset()
-                    dancing = True
+                    dancing, started_at = True, time.time()
                     publish({"type": "dance_started"})
                     print("dancing", flush=True)
                 elif t == "choreo_sync" and dancing:
@@ -218,6 +219,9 @@ def main() -> None:
                 elif t in ("dance_stop", "stop_requested", "call_ended") and dancing:
                     finish(t)
             if dancing:
+                if now - started_at >= args.max_seconds:
+                    finish(f"{args.max_seconds:.0f} seconds are up")
+                    continue
                 if choreo.music_gone(now):
                     finish("music ended")
                     continue
