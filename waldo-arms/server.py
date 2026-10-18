@@ -53,7 +53,11 @@ mcp = MCPServer("waldo-arms", instructions=(
     "sequence worked, call save_routine(name, description) to keep it (or pass your own steps); later "
     "run_routine(name, dry_run=true) checks every step without moving, then run_routine(name, dry_run=false) "
     "replays it. Step format: {op: move_hand, side, xyz:[x,y,z], seconds} | {op: gripper, side, action} | "
-    "{op: wait, seconds} | {op: park} | {op: set_table, z}."))
+    "{op: wait, seconds} | {op: park} | {op: set_table, z}. "
+    "FAST PATH (skills, one call each, planned + collision-checked + verified): pick(u, v) the object under a point "
+    "-> place(side, container=name) (list_containers; register_container once per station) or place(side, u, v) "
+    "under a point -> home(side). Fixed devices: list_controls, "
+    "run_task(name) (e.g. power_cycle_router). Check results with read_light(points) (~50 ms) or look."))
 
 
 class _Arm:
@@ -482,6 +486,227 @@ def look(camera: str = "head_camera", annotate: bool = True) -> Image:
         raise ToolError(f"camera unreachable at {CAM} ({e}). On a laptop, open the 8766 tunnel to waldo; "
                         "if the head feed is stalled, restart g1-camera-viewer on waldo")
     return Image(data=_annotate(data) if annotate and camera == "head_camera" else data, format="jpeg")
+
+
+# ---------- skills: one call per intent, for agents and onboard VLAs that only point ----------
+STATIONS = Path(os.environ.get("G1_STATIONS", Path(__file__).resolve().parent / "stations.json"))
+TAUGHT = Path(os.environ.get("G1_TAUGHT", Path(__file__).resolve().parent.parent / "waldo-sim" / "taught.json"))
+_plan = None
+
+
+def _parm(cmd, **kw):
+    """arm_server for planner.py: its retries expect PlanError; sim-only waits become real sleeps on the robot."""
+    from planner import PlanError
+    if cmd == "sim_wait" and "sim" not in ADDR and "127.0.0.1" not in ADDR:
+        time.sleep(float(kw.get("seconds", 0)))
+        return {"ok": True}
+    try:
+        return arm(cmd, timeout_s=120, **kw)
+    except ToolError as e:
+        raise PlanError(str(e))
+
+
+def _planner():
+    global _plan
+    from planner import Planner
+    desk = table_z if table_z is not None else -0.06
+    if _plan is None or _plan.desk != desk:
+        _plan = Planner(_parm, desk)
+    return _plan
+
+
+def _object_at(u, v, scale, box=None):
+    """Object geometry from a point, or from a box [u1, v1, u2, v2] (VLM bbox_2d; more robust in clutter)."""
+    cfg = _head_config()
+    h, w = cfg["image_shape"]
+    try:
+        if box is not None:
+            (b1, b2), (b3, b4) = (vision.to_pixels(float(box[0]), float(box[1]), scale, w, h),
+                                  vision.to_pixels(float(box[2]), float(box[3]), scale, w, h))
+            box = [b1, b2, b3, b4]
+            u, v = (b1 + b3) / 2, (b2 + b4) / 2
+        elif u is None or v is None:
+            raise ToolError("give a point (u, v) or a box [u1, v1, u2, v2]")
+        else:
+            u, v = vision.to_pixels(float(u), float(v), scale, w, h)
+    except (ValueError, TypeError, IndexError):
+        raise ToolError("scale must be pixels, norm1000 or norm1; box is [u1, v1, u2, v2]")
+    T, _ = _pelvis_from_cam()
+    depth = _depth_m()
+    g = vision.segment(depth, u, v, cfg["color_intrinsics"], T, table_z if table_z is not None else -0.06, box=box)
+    z, _ = vision.depth_at(depth, u, v)
+    if g is not None and box is None and z is not None:
+        g["point"] = vision.pixel_to_pelvis(u, v, z, cfg["color_intrinsics"], T).tolist()
+    if g is None:
+        raise ToolError(f"nothing stands above the desk at pixel ({u:.0f}, {v:.0f}); point at the object itself "
+                        "(set_table first if the desk height is not -0.06)")
+    return g
+
+
+def _skill(fn):
+    from planner import PlanError
+    t0 = time.monotonic()
+    try:
+        out = fn()
+    except PlanError as e:
+        raise ToolError(f"{e} (arm left clear; try another point or side)")
+    out["ms"] = round((time.monotonic() - t0) * 1000)
+    return out
+
+
+@mcp.tool()
+def pick(u: float | None = None, v: float | None = None, box: list[float] | None = None, scale: str = "pixels",
+         side: str | None = None) -> dict:
+    """Pick up the object under one point on the head image, or inside a box [u1, v1, u2, v2] (a VLM's bbox_2d:
+    better when objects touch). Depth gives its footprint, height and the axis to close
+    the jaws across, so you only point (pixel from look, or a VLM's norm1000 point). Tries both hands, several
+    grasp angles and approach pitches, with collision-free planned motion; verifies something is held.
+    Returns side (use it for place), the object geometry and the grasp used. Max graspable width ~90 mm."""
+    g = _object_at(u, v, scale, box)
+    rim = None
+    if g["ring"] or g["width"] > 0.09:
+        if not g["ring"]:
+            raise ToolError(f"object is {g['width'] * 1000:.0f} mm across its narrow side; the Dex1 opens to ~90 mm")
+        rim = max(0.0, min(g["width"], g["length"]) / 2 - 0.006)     # pinch the wall of a ring (tape roll)
+    p = _planner()
+    r = _skill(lambda: p.pick_item(np.array(g["centre"]), g["jaw_deg"], height_m=g["height"],
+                                   prefer_side=_side(side) if side else None, rim_radius_m=rim))
+    return {"side": r["side"], "held": True, "gripper_gap_mm": r["gripper"].get("gap_mm"),
+            "grasp": {"jaw_deg": r["jaw_deg"], "pitch_deg": r["pitch_deg"], "tries": len(r["attempts"])},
+            "object": {k: (round(g[k], 3) if isinstance(g[k], float) else g[k]) for k in ("height", "width", "length", "ring")},
+            "ms": r["ms"]}
+
+
+def _stations() -> dict:
+    return json.loads(STATIONS.read_text()) if STATIONS.exists() else {}
+
+
+@mcp.tool()
+def register_container(name: str, u: float | None = None, v: float | None = None, box: list[float] | None = None,
+                       scale: str = "pixels", rim_z: float | None = None, drop_xy: list[float] | None = None) -> dict:
+    """Remember a fixed container (cup, tray, bin, caddy) once, so place(container=name) works without looking:
+    point at (or box) it on the head image; its footprint and rim come from depth. Point at the open spot to drop
+    into (an empty compartment) or pass drop_xy [x, y] (m). rim_z overrides a rim the camera can't fully see
+    (a tall back wall at the image edge). Containers are stations: register them when the cell is set up."""
+    g = _object_at(u, v, scale, box)
+    st = _stations()
+    st[name] = {"box_min": [round(c, 3) for c in g["box_min"]],
+                "box_max": [round(c, 3) for c in g["box_max"][:2]] + [round(rim_z if rim_z is not None else g["top_z"], 3)],
+                "drop_xy": [round(c, 3) for c in (drop_xy or g.get("point") or g["centre"])[:2]]}
+    STATIONS.write_text(json.dumps(st, indent=1))
+    return {name: st[name]}
+
+
+@mcp.tool()
+def list_containers() -> dict:
+    """Registered containers (name -> footprint box, rim height, drop spot), for place(container=name)."""
+    return _stations()
+
+
+@mcp.tool()
+def place(side: str, container: str | None = None, u: float | None = None, v: float | None = None,
+          box: list[float] | None = None, scale: str = "pixels") -> dict:
+    """Put what `side` holds into a container: by name (register_container / list_containers: fastest, no camera),
+    or under a point on the head image (point at the open spot to drop into, away from dividers), or a box.
+    The item is lifted clear of every rim, carried level, lowered in and released (fingers slide off before the arm
+    moves). Then call home(side)."""
+    _side(side)
+    if container is not None:
+        st = _stations()
+        if container not in st:
+            raise ToolError(f"unknown container {container!r}; registered: {sorted(st)}")
+        g = st[container]
+        at = g["drop_xy"]
+    else:
+        g = _object_at(u, v, scale, box)
+        at = g.get("point")
+    p = _planner()
+    _skill(lambda: p.place(side, g["box_min"], g["box_max"], at=at) or {})
+    return {"side": side, "released": True, "container": container or "pointed",
+            "drop_xy": [round(c, 3) for c in (at or [])[:2]], "rim_z": round(g["box_max"][2], 3)}
+
+
+@mcp.tool()
+def home(side: str = "both") -> str:
+    """Rest one or both arms low by the sides on a collision-free path (out of the camera's view and the other
+    hand's way). Do this after place, and before handing control back."""
+    sides = ["left", "right"] if side == "both" else [_side(side)]
+    p = _planner()
+    for s in sides:
+        _skill(lambda: p.home(s) or {})
+    return f"{', '.join(sides)} at rest"
+
+
+def _taught() -> dict:
+    if not TAUGHT.exists():
+        raise ToolError(f"no taught controls at {TAUGHT}; teach them first (waldo-sim/teach.py)")
+    return json.loads(TAUGHT.read_text())
+
+
+@mcp.tool()
+def list_controls() -> dict:
+    """Fixed-station controls (switches, buttons, keys) and multi-step tasks taught for this cell. Taught motions
+    are verified joint trajectories: the fastest, most reliable way to operate a known device."""
+    import sys
+    sys.path.insert(0, str(TAUGHT.parent))
+    import teach
+    return {"controls": {n: t["side"] for n, t in _taught().items()},
+            "tasks": {n: [c for c, _ in steps] for n, steps in teach.TASKS.items()}}
+
+
+@mcp.tool()
+def run_task(name: str) -> dict:
+    """Run a taught task (e.g. power_cycle_router, approve_2fa, start_machine, light_on) or a single taught control by
+    name. See list_controls. Waits between steps (router off 5 s) are part of the task."""
+    import sys
+    sys.path.insert(0, str(TAUGHT.parent))
+    import teach
+    taught = _taught()
+    steps = teach.TASKS.get(name) or ([(name, 0.0)] if name in taught else None)
+    if steps is None:
+        raise ToolError(f"unknown task or control {name!r}; known: {sorted(teach.TASKS) + sorted(taught)}")
+    missing = [c for c, _ in steps if c not in taught]
+    if missing:
+        raise ToolError(f"not taught yet: {missing}")
+    def go():
+        arm("enable")
+        for ctl, wait in steps:
+            teach.play(_parm, ctl, taught)
+            if wait:
+                _parm("sim_wait", seconds=wait)
+        return {}
+    out = _skill(go)
+    return {"task": name, "done": [c for c, _ in steps], "ms": out["ms"],
+            "verify": "call read_light / look to confirm the device changed state"}
+
+
+@mcp.tool()
+def read_light(points: list[list[float]], scale: str = "pixels") -> dict:
+    """Read indicator lights / lamps / screens at points on the head image: on/off, colour and brightness from a small
+    patch (no VLM needed: ~50 ms). Use it to verify a task (router LED back to green, lamp lit, machine running)."""
+    import colorsys
+    from PIL import Image as PILImage
+    try:
+        with urllib.request.urlopen(f"{CAM}/frame/head_camera.jpg", timeout=5) as r:
+            im = np.asarray(PILImage.open(io.BytesIO(r.read())).convert("RGB"), np.float32) / 255
+    except OSError as e:
+        raise ToolError(f"camera unreachable at {CAM} ({e})")
+    H, W, _ = im.shape
+    out = []
+    for pt in points[:32]:
+        u, v = vision.to_pixels(float(pt[0]), float(pt[1]), scale, W, H)
+        ui, vi = int(round(u)), int(round(v))
+        patch = im[max(0, vi - 4):vi + 5, max(0, ui - 4):ui + 5].reshape(-1, 3)
+        if not len(patch):
+            out.append({"u": ui, "v": vi, "why": "outside the image"})
+            continue
+        bright = patch[patch.max(1) >= np.percentile(patch.max(1), 70)].mean(0)     # the lit part of the patch
+        hh, ss, vv = colorsys.rgb_to_hsv(*bright)
+        hue = ("red", "orange", "yellow", "green", "green", "cyan", "blue", "blue", "purple", "magenta", "red")[min(10, int(hh * 360 / 34))]
+        on = vv > 0.55 and (ss > 0.35 or vv > 0.9)
+        out.append({"u": ui, "v": vi, "on": bool(on), "colour": hue if ss > 0.25 else "white",
+                    "brightness": round(float(vv), 2), "saturation": round(float(ss), 2)})
+    return {"lights": out}
 
 
 if __name__ == "__main__":

@@ -154,6 +154,7 @@ class Sim:
         self.static_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] == 0 or m.geom_bodyid[g] in self.containers.values()}
         mujoco.mj_forward(m, self.d)
         self.box = {n: self._aabb(b) for n, b in self.containers.items()}
+        self.drop = None        # per-container drop spots, mapped at the first reset (items then sit outside them)
         ec = {n: self._body_extent(b) for n, b in self.items.items()}
         self.extent = {n: e for n, (e, _) in ec.items()}
         self.centre = {n: c for n, (_, c) in ec.items()}     # scanned meshes aren't centred on the body origin
@@ -193,6 +194,22 @@ class Sim:
         p = np.vstack(pts)
         return p.max(0) - p.min(0), (p.max(0) + p.min(0)) / 2     # size, geometric centre (body frame)
 
+    def _drop_spot(self, lo, hi, cell=0.005):
+        """Where to drop into a container: the open floor point farthest from any wall or divider (raycast height
+        map + brute-force distance transform). On the robot the same comes from the head camera's depth."""
+        xs, ys = np.arange(lo[0] + cell / 2, hi[0], cell), np.arange(lo[1] + cell / 2, hi[1], cell)
+        gid = np.zeros(1, np.int32)
+        z = np.array([[0.5 - mujoco.mj_ray(self.m, self.d, np.array([x, y, 0.5]), np.array([0, 0, -1.0]), None, 1, -1, gid)
+                       for y in ys] for x in xs])
+        floor = z.min()
+        X, Y = np.meshgrid(xs, ys, indexing="ij")
+        open_ = z < floor + 0.02
+        P, Q = np.stack([X[open_], Y[open_]], 1), np.stack([X[~open_], Y[~open_]], 1)
+        border = np.minimum.reduce([P[:, 0] - lo[0], hi[0] - P[:, 0], P[:, 1] - lo[1], hi[1] - P[:, 1]])
+        clear = border if not len(Q) else np.minimum(border, np.sqrt(((P[:, None] - Q[None]) ** 2).sum(-1)).min(1))
+        k = int(np.argmax(clear))
+        return [round(float(P[k, 0]), 3), round(float(P[k, 1]), 3), round(float(clear[k]), 3)]
+
     # ----- world -----
     def reset(self, seed: int, n_items: int | None = None):
         m, d = self.m, self.d
@@ -209,16 +226,19 @@ class Sim:
         placed = []
         for n in names:
             qa = self.item_qadr[n]
+            if n in chosen:
+                for _ in range(500):
+                    xy = np.array([rng.uniform(*SPAWN["x"]), rng.uniform(*SPAWN["y"])])
+                    clear_of_containers = all(not (lo[0] - 0.04 - RADIUS[n] < xy[0] < hi[0] + 0.04 + RADIUS[n] and
+                                                   lo[1] - 0.04 - RADIUS[n] < xy[1] < hi[1] + 0.04 + RADIUS[n])
+                                              for lo, hi in self.box.values())
+                    if clear_of_containers and all(np.linalg.norm(xy - p) > RADIUS[n] + RADIUS[o] + 0.01 for o, p in placed):
+                        break
+                else:                              # no room left on this desk: leave it off rather than stack it
+                    chosen.remove(n)
             if n not in chosen:                    # parked out of the way, behind the robot
                 d.qpos[qa:qa + 3] = [-0.8, 0.15 * names.index(n) - 0.7, scene.FLOOR_Z + 0.05]
                 continue
-            for _ in range(500):
-                xy = np.array([rng.uniform(*SPAWN["x"]), rng.uniform(*SPAWN["y"])])
-                clear_of_containers = all(not (lo[0] - 0.07 - RADIUS[n] < xy[0] < hi[0] + 0.07 + RADIUS[n] and
-                                               lo[1] - 0.07 - RADIUS[n] < xy[1] < hi[1] + 0.07 + RADIUS[n])
-                                          for lo, hi in self.box.values())
-                if clear_of_containers and all(np.linalg.norm(xy - p) > RADIUS[n] + RADIUS[o] + 0.01 for o, p in placed):
-                    break
             placed.append((n, xy))
             yaw = rng.uniform(-math.pi, math.pi)
             c = self.centre[n]                         # place the item's geometric centre (not its origin) at xy
@@ -228,6 +248,9 @@ class Sim:
             d.qpos[qa + 3:qa + 7] = out
             d.qpos[qa + 2] = self.desk.top_z + 0.03   # dropped from 3 cm, settles below
         self.chosen = chosen
+        if self.drop is None:
+            mujoco.mj_forward(m, d)
+            self.drop = {n: self._drop_spot(lo, hi) for n, (lo, hi) in self.box.items()}
         if self.dev:
             self.dev.reset()
         mujoco.mj_forward(m, d)
@@ -338,9 +361,9 @@ class Sim:
                 if hit is None or hit in arm or hit in item_bodies or (self.dev and hit in self.dev.bodies):
                     continue
                 mine = b1 if b1 in arm else b2
-                if s in contact_ok and "dex1" in m.body(mine).name and hit == 0:     # any gripper part may touch the desk
-                    continue
                 depth = -c.dist
+                if s in contact_ok and "dex1" in m.body(mine).name and (hit == 0 or (hit in self.containers.values() and depth < 0.004)):
+                    continue    # a grasp's descent/lift may touch the desk and graze a container rim (rigid, harmless)
                 own_body = hit not in self.containers.values() and hit != 0
                 # Convex-hull collision shapes are bulkier than the real links: tolerate <5 mm overlap against the
                 # robot's own body / other arm, ~1 mm (numerical) against the desk and containers.
@@ -588,12 +611,23 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
             sim.dev.state, sim.dev.history, sim.dev.presses, sim.dev._pressed, sim.dev.power_on_t = dict(st), list(hist), dict(pr), dict(prd), pt
         mujoco.mj_forward(sim.m, sim.d)
         return {}
-    if cmd == "sim_wait":                           # let sim time pass (e.g. "wait 5 s before powering back on")
+    if cmd == "sim_get_world":                      # whole-world state, to seed a twin sim (the real robot: from perception)
+        return {"qpos": sim.d.qpos.tolist(), "items": {str(n): int(sim.item_qadr[n]) for n in sim.chosen}, "enabled": sim.enabled}
+    if cmd == "sim_set_world":
+        sim.d.qpos[:] = r["qpos"]
+        sim.d.qvel[:] = 0
+        sim.enabled = r.get("enabled", sim.enabled)
+        mujoco.mj_forward(sim.m, sim.d)
+        sim._hold_ctrl()
+        sim.step(int(r.get("settle", 0)))
+        return {}
+    if cmd == "sim_wait":                          # let sim time pass (e.g. "wait 5 s before powering back on")
         sim.step(int(float(r.get("seconds", 1.0)) / sim.m.opt.timestep))
         return {"time": round(sim.d.time, 2)}
     if cmd == "sim_objects":
         return {"objects": sim.objects(), "desk_top_z": sim.desk.top_z,
-                "containers": {n: {"category": c[3], "box_min": sim.box[n][0].round(3).tolist(), "box_max": sim.box[n][1].round(3).tolist()}
+                "containers": {n: {"category": c[3], "box_min": sim.box[n][0].round(3).tolist(), "box_max": sim.box[n][1].round(3).tolist(),
+                                   "drop_xy": sim.drop[n][:2], "drop_clear_m": sim.drop[n][2]}
                                for n, c in scene.CONTAINERS.items() if n in sim.box}}
     if cmd == "sim_point":
         # Oracle pointer: the item's top-centre projected into the head image, with VLM-like pixel noise.
@@ -604,7 +638,12 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         u, v = cam_project(top)
         rng = np.random.default_rng(r.get("seed"))
         nz = float(r.get("noise_px", 0))
-        return {"item": n, "u": round(u + rng.normal(0, nz), 1), "v": round(v + rng.normal(0, nz), 1), "noise_px": nz}
+        R = sim.d.xmat[b].reshape(3, 3)          # and its 2D box, like a detector / VLM bbox_2d
+        uv = np.array([cam_project(sim.d.xpos[b] + R @ (sim.centre[n] + sim.extent[n] * np.array([i, j, k]) / 2))
+                       for i in (-1, 1) for j in (-1, 1) for k in (-1, 1)])
+        box = np.concatenate([uv.min(0), uv.max(0)]) + rng.normal(0, nz, 4)
+        return {"item": n, "u": round(u + rng.normal(0, nz), 1), "v": round(v + rng.normal(0, nz), 1), "noise_px": nz,
+                "box": [round(float(c), 1) for c in box]}
     raise ValueError(f"unknown cmd {cmd}")
 
 

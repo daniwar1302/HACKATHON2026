@@ -59,5 +59,20 @@ G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs
 
   The safety layer works (refuses instead of crashing); good movement comes from the planner. Next: expose the
   planner as MCP tools (`pick`, `place`) so agents get it directly.
-* **Current sort rate: 10/30 (33%)** with ground-truth positions, after motion planning + smooth trajectories (was 8/30). Main remaining failures: wrist-turn collisions with the
-  torso (elbow in), grasps that miss thin items, the tape.
+* **Earlier sort rate: 10/30 (33%)** on the small-item desk, after motion planning + smooth trajectories (was 8/30).
+* **Big-object desk (2026-10-17), 12 desks x 2 items, ground-truth positions** (`bench_sort.py --truth --trials 12 --items 4`):
+
+  | Version | Sorted |
+  |---|---|
+  | planner as of f0aac34 (free-path carry, drop at the box centre) | 2/24 (8%) |
+  | + no stacked spawns, tall items gripped 3 cm under the top, rim-graze tolerance, other arm sent to rest | 3/24 (12%) |
+  | + **up-over-down carry** (item lifted clear of every rim, carried level, lowered in), **drop spot** = open floor point farthest from walls/dividers, fingers slide off before the arm moves | **8-12/24 (33-50%)** over three runs (RRT is randomized) |
+  | same, rehearsed on a twin sim first (`--twin`, rehearse.py) | 11/24 (46%) |
+
+  What was wrong, from recorded frames: the free-path carry swung the held box into the robot and knocked it to the
+  floor (the twin doesn't model the held item); the caddy's centre is a divider; a tape roll hangs on the finger
+  inside its core and got flung by the move to rest. Left: label reel (5/5 miss: grasp closes on nothing), tape slips
+  out of the rim pinch during the carry, a few unreachable pre-grasps near the body.
+* **Device stations, taught + replayed (`teach.py bench --rounds 5`): 20/20** (power-cycle router, approve 2FA key,
+  start button, light switch). Teaching searches candidate presses on the twin and keeps the first that the sim
+  verifies; housing/part contact excludes were the fix that made the power strip teachable.

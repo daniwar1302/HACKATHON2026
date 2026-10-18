@@ -40,10 +40,15 @@ def main():
     ap.add_argument("--noise-px", type=float, default=0.0)
     ap.add_argument("--truth", action="store_true")
     ap.add_argument("--addr", default="tcp://127.0.0.1:15810")
+    ap.add_argument("--twin", help="rehearse each item on this second sim first (rehearse.py), then execute")
+    ap.add_argument("--noise-mm", type=float, default=0.0, help="item position error given to the twin")
     a = ap.parse_args()
     arm = Arm(a.addr)
     info = arm("sim_objects")
     p = Planner(arm, info["desk_top_z"])
+    if a.twin:
+        from rehearse import rehearse
+        twin = Arm(a.twin)
     if not a.truth:
         import zmq
         cfg_sock = zmq.Context.instance().socket(zmq.REQ)
@@ -58,6 +63,8 @@ def main():
     stats, fails, t0, n = Counter(), Counter(), time.time(), 0
     for seed in range(a.trials):
         objs = arm("sim_reset", seed=seed, n_items=a.items)["objects"]
+        if a.twin:
+            twin("sim_reset", seed=seed, n_items=a.items)
         for name in objs:
             o = arm("sim_objects")["objects"][name]
             if o["in_container"]:
@@ -74,12 +81,22 @@ def main():
             else:
                 h = o["height_mm"] / 1000
                 centre = np.array(xyz) if a.truth else np.array(xyz) - [0, 0, h / 2]   # vision gives the top surface
+                def sort(pl, side=None):
+                    r = pl.pick_item(centre, o["grip_jaw_deg"], height_m=h, prefer_side=side, rim_radius_m=o.get("rim_radius_m"))
+                    pl.place(r["side"], box["box_min"], box["box_max"], at=box.get("drop_xy"))
+                    pl.home(r["side"])
+                    return r
                 try:
-                    r = p.pick_item(centre, o["grip_jaw_deg"], height_m=h, rim_radius_m=o.get("rim_radius_m"))
-                    p.place(r["side"], box["box_min"], box["box_max"])
-                    p.home(r["side"])
-                    if len(r["attempts"]) > 1:
-                        why = f"(ok after {len(r['attempts'])} tries)"
+                    if a.twin:
+                        _, tried = rehearse(p, arm, twin, [("auto", sort), ("left", lambda pl: sort(pl, "left")),
+                                                           ("right", lambda pl: sort(pl, "right"))],
+                                            lambda t: t("sim_objects")["objects"][name]["in_container"] == target,
+                                            a.noise_mm, np.random.default_rng(seed * 100 + n))
+                        why = f"(rehearsed: {'; '.join(tried)})" if len(tried) > 1 else ""
+                    else:
+                        r = sort(p)
+                        if len(r["attempts"]) > 1:
+                            why = f"(ok after {len(r['attempts'])} tries)"
                 except PlanError as e:
                     why = str(e)
                     stuck = not all([p.recover("left"), p.recover("right")])

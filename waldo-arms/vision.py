@@ -90,6 +90,78 @@ def to_pixels(u: float, v: float, scale: str, width: int, height: int) -> tuple[
     raise ValueError("scale must be pixels, norm1000 or norm1")
 
 
+def segment(depth_m, u, v, K, T_pelvis_cam, desk_z, min_h=0.008, grow_px=200, snap_px=45, max_r=0.12, step_m=0.012, box=None):
+    """The object under pixel (u, v): pixels standing > min_h above the desk, flood-filled from the click (4-connected,
+    neighbours < step_m apart in 3D so touching objects split at depth edges, within max_r of the seed in xy). Returns pelvis-frame geometry so an agent only has to point:
+      centre (xy centroid, z mid-height), top_z, height, length/width (PCA extents in xy), jaw_deg (the axis the
+      jaws should close along = the narrow direction), ring (hollow centre, like a tape roll), pixels.
+    box: [u1, v1, u2, v2] from a detector / VLM (bbox_2d): only pixels inside it count, so touching objects split
+      cleanly; (u, v) is then just the seed (pass the box centre).
+    None if nothing stands above the desk there."""
+    h, w = depth_m.shape
+    vv, uu = np.mgrid[0:h, 0:w]
+    z = depth_m
+    ok = (z > DEPTH_RANGE[0]) & (z < DEPTH_RANGE[1])
+    pts = np.stack([(uu - K["ppx"]) / K["fx"] * z, (vv - K["ppy"]) / K["fy"] * z, z, np.ones_like(z)], -1)
+    P = pts @ T_pelvis_cam.T
+    above = ok & (P[..., 2] > desk_z + min_h)
+    if box is not None:
+        u1, v1, u2, v2 = (int(round(c)) for c in box)
+        inside = np.zeros_like(above)
+        inside[max(0, v1):max(0, v2) + 1, max(0, u1):max(0, u2) + 1] = True
+        above &= inside
+        max_r, grow_px = 1.0, 10 ** 6
+    ui, vi = int(round(u)), int(round(v))
+    if not (0 <= ui < w and 0 <= vi < h):
+        return None
+    if not above[vi, ui]:                      # the click grazed an edge or a hole: snap to the nearest object pixel
+        y0, x0 = max(0, vi - snap_px), max(0, ui - snap_px)    # (a ring's centre is a hole: reach its wall)
+        ys, xs = np.nonzero(above[y0:vi + snap_px + 1, x0:ui + snap_px + 1])
+        if not len(ys):
+            return None
+        k = np.argmin((ys + y0 - vi) ** 2 + (xs + x0 - ui) ** 2)
+        vi, ui = ys[k] + y0, xs[k] + x0
+    seen = np.zeros_like(above)
+
+    def flood(sy, sx):
+        seen[sy, sx] = True
+        stack, region = [(sy, sx)], []
+        while stack:
+            y, x = stack.pop()
+            region.append((y, x))
+            for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+                if (0 <= ny < h and 0 <= nx < w and not seen[ny, nx] and above[ny, nx] and abs(ny - sy) + abs(nx - sx) < grow_px
+                        and np.linalg.norm(P[ny, nx, :3] - P[y, x, :3]) < step_m
+                        and np.linalg.norm(P[ny, nx, :2] - P[sy, sx, :2]) < max_r):
+                    seen[ny, nx] = True
+                    stack.append((ny, nx))
+        return region
+
+    region = flood(vi, ui)
+    if box is not None:      # in a box: the biggest piece is the object (a ring's wall can break into arcs; merge them
+        pieces = [region] + [flood(y, x) for y, x in zip(*np.nonzero(above)) if not seen[y, x]]
+        pieces.sort(key=len, reverse=True)
+        region = [px for pc in pieces if len(pc) > 0.15 * len(pieces[0]) for px in pc]    # ...and keep the big arcs)
+    ys, xs = np.array(region).T
+    p = P[ys, xs, :3]
+    xy = p[:, :2]
+    c = xy.mean(0)
+    evals, evecs = np.linalg.eigh(np.cov((xy - c).T))
+    minor, major = evecs[:, 0], evecs[:, 1]
+    proj_min, proj_maj = (xy - c) @ minor, (xy - c) @ major
+    top = float(np.percentile(p[:, 2], 95))
+    width = float(np.ptp(proj_min))
+    length = float(np.ptp(proj_maj))
+    centre_xy = c + minor * (proj_min.max() + proj_min.min()) / 2 + major * (proj_maj.max() + proj_maj.min()) / 2
+    # hollow: the middle of the footprint is (near) desk height, e.g. a tape roll or an empty cup seen from above
+    near = np.linalg.norm(xy - centre_xy, axis=1) < 0.25 * min(width, length)
+    ring = bool(min(width, length) > 0.05 and near.sum() < 0.02 * len(xy))
+    return {"centre": [float(centre_xy[0]), float(centre_xy[1]), (top + desk_z) / 2], "top_z": top,
+            "height": top - desk_z, "length": length, "width": width,
+            "jaw_deg": float(np.degrees(np.arctan2(minor[1], minor[0]))), "ring": ring, "pixels": len(region),
+            "box_min": [float(xy[:, 0].min()), float(xy[:, 1].min()), desk_z], "box_max": [float(xy[:, 0].max()), float(xy[:, 1].max()), top]}
+
+
 if __name__ == "__main__":
     # Self-check: round trips, the mount's direction, and the robust depth window.
     K = {"fx": 604.93, "fy": 604.43, "ppx": 326.58, "ppy": 247.79}
@@ -118,4 +190,23 @@ if __name__ == "__main__":
     assert z is not None and frac == 0.0, (z, frac)
     assert depth_at(dm, 700, 10) == (None, 0.0)
     assert to_pixels(500, 500, "norm1000", 640, 480) == (320.0, 240.0)
+    # Segment a synthetic 10 x 4 cm box (3 cm tall, long axis along y) on the desk, seen through the real mount.
+    desk = -0.06
+    dm = np.zeros((480, 640))
+    Tinv = np.linalg.inv(T)
+    for vi in range(480):              # ray-cast each pixel against the desk plane and the box top
+        for ui in range(0, 640):
+            ray = T[:3, :3] @ np.array([(ui - K["ppx"]) / K["fx"], (vi - K["ppy"]) / K["fy"], 1.0])
+            for zp, inside in ((desk + 0.03, lambda q: abs(q[0] - 0.30) < 0.02 and abs(q[1]) < 0.05), (desk, lambda q: True)):
+                t = (zp - lens[2]) / ray[2]
+                q = lens + t * ray
+                if t > 0 and inside(q):
+                    dm[vi, ui] = (Tinv @ np.append(q, 1))[2]
+                    break
+    u0, v0 = pelvis_to_pixel([0.30, 0.0, desk + 0.03], K, T)
+    g = segment(dm, u0, v0, K, T, desk)
+    assert abs(g["width"] - 0.04) < 0.006 and abs(g["length"] - 0.10) < 0.006, g
+    assert abs(g["height"] - 0.03) < 0.003, g
+    assert min(abs(g["jaw_deg"]) % 180, 180 - abs(g["jaw_deg"]) % 180) < 3, g     # jaws close along x, across the 4 cm
+    assert abs(g["centre"][0] - 0.30) < 0.005 and abs(g["centre"][1]) < 0.005 and not g["ring"], g
     print("vision self-check ok; lens at", lens.round(3), "pelvis->torso identity")

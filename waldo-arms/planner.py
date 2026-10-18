@@ -110,6 +110,7 @@ class Planner:
     def __init__(self, arm, desk_top_z: float = -0.06, log=None, twin=True, scene_kind: str = "sort"):
         self.arm, self.desk, self.log = arm, desk_top_z, log or (lambda *a: None)
         self.R = {"left": None, "right": None}
+        self.held = {}     # side -> (item centre - grip point, grip height above the item's bottom), set by pick_item
         self.twin = None
         if twin:
             try:                               # collision-free motion planning on a MuJoCo digital twin
@@ -121,8 +122,9 @@ class Planner:
     def q14(self):
         return np.array(self.arm("state")["arm"]["q"], float)
 
-    def move_free(self, side, target, R=None):
-        """Plan a collision-free joint path to the hand at `target` (orientation R, or level jaws) and run it."""
+    def move_free(self, side, target, R=None, speed=1.2):
+        """Plan a collision-free joint path to the hand at `target` (orientation R, or level jaws) and run it.
+        speed: peak joint speed (rad/s); slower when carrying so the item doesn't slip."""
         if self.twin is None:
             self.lin(side, target, R)
             return
@@ -130,7 +132,7 @@ class Planner:
         path = self.twin.plan(side, self.q14(), target, R)
         if path is None:
             raise PlanError(f"no collision-free path to {np.round(target, 3).tolist()}")
-        q, times = timed(path)
+        q, times = timed(path, max_joint_speed=speed)
         self.arm("trajectory", q=q, times=times, side=side)
         self.R[side] = R
 
@@ -239,6 +241,8 @@ class Planner:
         x, y, z = (float(v) for v in xyz)
         jaws = range(0, 180, 30) if round_item else [jaw_deg + o for o in self.JAW_OFFSETS]
         grip_z = z - (0.002 if height_m < 0.025 else 0.0)        # centre height, 2 mm lower for thin items
+        if height_m > 0.06:          # tall: grip 3 cm under the top, or the palm reaches the top first and tips it
+            grip_z = z + height_m / 2 - 0.03
         out = []
         for i, jaw in enumerate(jaws):
             hd = math.radians(heading_for(jaw, side))
@@ -258,6 +262,10 @@ class Planner:
     def execute(self, g: Grasp, lift=0.13):
         side = g.side
         self.arm("enable")
+        other = "right" if side == "left" else "left"
+        po = self.hand(other)
+        if po[0] > 0.15 and po[2] > self.desk - 0.02:      # the other hand is parked over the desk: send it to rest
+            self.home(other)
         self.ensure_clear(side)
         if self.twin is not None:
             self.stage("to pre-grasp", lambda: self.move_free(side, g.pre, g.R))
@@ -300,6 +308,7 @@ class Planner:
             for g in cands[:self.TRIES_PER_SIDE]:
                 try:
                     st = self.execute(g)
+                    self.held[side] = (xyz - g.grip, g.grip[2] - (xyz[2] - height_m / 2))
                     return {"side": side, "jaw_deg": round(g.jaw, 1), "pitch_deg": g.pitch, "gripper": st,
                             "attempts": attempts + [f"{side} jaw {g.jaw:.0f} pitch {g.pitch}: ok"]}
                 except PlanError as e:
@@ -390,20 +399,68 @@ class Planner:
                     self.recover(sd)
         raise PlanError("; ".join(errors[-3:]) or "no reachable press direction")
 
-    def place(self, side, box_min, box_max, drop_dz=0.07):
-        """Carry the held item over the container's centre and open. Keeps the grasp orientation when reachable."""
-        cx, cy = (box_min[0] + box_max[0]) / 2, (box_min[1] + box_max[1]) / 2
+    def place(self, side, box_min, box_max, at=None):
+        """Carry the held item into the container and open. at: [x, y] drop spot (an open compartment: the point
+        farthest from walls/dividers, or where a VLM pointed); else the box centre. Falls back along the container's
+        long axis. Keeps the grasp orientation, so the item hangs the same way it was picked."""
+        lo, hi = np.asarray(box_min, float), np.asarray(box_max, float)
+        c = (lo + hi) / 2
+        if at is not None:
+            c[:2] = at[:2]
+        long_ax = 0 if hi[0] - lo[0] > hi[1] - lo[1] else 1
+        half = (hi[long_ax] - lo[long_ax]) / 2
         p = self.hand(side)
-        target = np.array([cx - 0.03, cy, max(box_max[2] + drop_dz, p[2])])
-        R = self.R[side]
-        if R is not None and not all(self.ik_ok(side, pt, R) for pt in ([p[0], p[1], target[2]], target)):
-            R = None
-        if self.twin is not None:
-            self.stage("carry", lambda: self.move_free(side, target, R))
+        off, below = self.held.get(side, (None, None))
+        if off is None:              # unknown grip: treat the hand as the item, hanging ~5 cm
+            off, below = np.zeros(3), 0.05
+        # up, over, down: lift until the item's bottom clears every rim, travel level, lower into the spot. The twin
+        # doesn't model the held item, so a planned free path could swing it into the robot or a container.
+        rim = max(hi[2], self.desk + 0.11)          # highest container rim on this desk (caddy back wall)
+        z_carry, z_drop = rim + below + 0.04, hi[2] + below + 0.025
+        Rs = [self.R[side], None] if self.R[side] is not None else [None]     # grasp orientation, else level jaws
+        last = None
+        for R in Rs:
+            try:
+                self.stage("lift to carry height", lambda: self.lin(side, [p[0], p[1], max(p[2], z_carry)], R, speed=0.12))
+                break
+            except PlanError as e:
+                last = e
         else:
-            self.stage("raise to carry height", lambda: self.lin(side, [p[0], p[1], target[2]], R))
-            self.stage("carry", lambda: self.lin(side, target, R))
+            raise last
+        for f, R in [(f, R) for f in (0.0, -0.3, 0.3, -0.6, 0.6) for R in Rs]:
+            t = np.array([c[0] - off[0], c[1] - off[1], z_carry])
+            t[long_ax] += f * half
+            try:
+                self.stage("carry over", lambda: self.lin(side, t, R, speed=0.12))
+                for z in (z_drop, (z_drop + z_carry) / 2):     # as low as reachable; else drop from carry height
+                    try:
+                        self.lin(side, [t[0], t[1], z], R, speed=0.06, contact=True)
+                        break
+                    except PlanError:
+                        pass
+                break
+            except PlanError as e:
+                last = e
+        else:
+            raise last
+        st = self.arm("gripper_state", side=side)
+        if st.get("holding") is False:
+            raise PlanError("place: item slipped out during the carry")
         self.arm("open", side=side)
+        self.held.pop(side, None)
+        # slide the open fingers off the item: toward its centre first (a ring hangs on the finger inside its core),
+        # then straight up; a swing straight to rest would fling it
+        h = self.hand(side)
+        if np.linalg.norm(off[:2]) > 0.01:
+            h = h + np.append(off[:2] / np.linalg.norm(off[:2]) * 0.015, 0.0)
+            try:
+                self.stage("release in", lambda: self.lin(side, h, self.R[side], speed=0.05, contact=True))
+            except PlanError:
+                pass
+        try:
+            self.stage("release up", lambda: self.lin(side, [h[0], h[1], h[2] + 0.08], self.R[side], speed=0.08, contact=True))
+        except PlanError:
+            pass
 
     def home(self, side):
         """Rest the arm low by the side (like a person's idle arm): out of the camera's view and the other hand's way."""
