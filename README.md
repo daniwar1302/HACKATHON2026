@@ -71,7 +71,8 @@ need most of it.
 
 | Folder | What it does |
 |--------|--------------|
-| [`waldo-live/`](waldo-live/) | The live loop: event bus, Jev watcher, Inkbox ⇄ OpenAI Realtime call bridge, Claude brain, clip recorder |
+| [`waldo-live/`](waldo-live/) | The live loop: event bus, Jev watcher, Inkbox ⇄ OpenAI Realtime call bridge (help, command and dance calls), beat tracker, phone camera page, Claude brain, clip recorder |
+| [`waldo-mirror/`](waldo-mirror/) | The G1's arms: live mirroring from a phone camera, the dance engine (freestyle on the beat + Just Dance routines), choreography worker |
 | [`waldo-ask/`](waldo-ask/) | MCP server for asking the operator by email, iMessage, SMS or phone, with the hint memory |
 | [`waldo-mcp/`](waldo-mcp/) | MCP server for the G1 humanoid over the Unitree SDK: stand, gestures, stop, cameras (no walking) |
 | [`waldo-call/`](waldo-call/) | One-shot test call through Inkbox's hosted voice agent |
@@ -91,6 +92,15 @@ ssh waldo@100.120.182.66 '~/HACKATHON2026/waldo-live/stop.sh'
 
 In tmux: click a pane to focus it, **Ctrl-b then d** to leave everything running. Details are in [`waldo-live/README.md`](waldo-live/README.md).
 
+From your phone, text Waldo's iMessage line (where you sent `connect @waldo-agent`):
+
+| Text | What happens |
+|------|--------------|
+| `call me` | Waldo calls; say commands from the menu ("status", "wave"...). Motion needs your "yes" |
+| `dance` | Waldo calls, asks for a song and dances to it. Text the song name for the Just Dance routine. Say or text "stop" to stop |
+
+Arm mirroring and the dance engine: [`waldo-mirror/README.md`](waldo-mirror/README.md).
+
 ## Status (2026-10-17)
 
 | Piece | State |
@@ -100,8 +110,11 @@ In tmux: click a pane to focus it, **Ctrl-b then d** to leave everything running
 | Call bridge | ✅ Built, tested with fakes; Inkbox tunnel `waldo-agent.inkboxwire.com` active, signing key set |
 | Phone calls | ✅ Test call to the operator worked (Inkbox shared iMessage line, transcript read back) |
 | **Phone commands (MVP)** | ✅ **Text "call me" → Waldo calls → "wave" → "Go ahead?" → "Yes" → the G1 waves** (~1 s from yes to motion) |
+| **Arm mirroring** | ✅ Live on the G1: phone camera → MediaPipe → Unitree IK → arms, at 0.8 rad/s with comfort limits and a clean release |
+| **Dance calls** | ✅ Live on the G1: text "dance" → Waldo calls → plays your song → "I can feel that song in my joints! 3, 2, 1" → dances until the song ends |
+| **Just Dance routines** | ✅ Text the song name during a dance → routine found on YouTube, converted with MediaPipe in ~100 s (Levitating cached), synced to the call audio |
 | Brain | ✅ Built, tested with a fake model; runs on Waldo |
-| Tests | ✅ 12 (`waldo-ask`) + 14 (`waldo-live`) passing on Waldo |
+| Tests | ✅ 12 (`waldo-ask`) + 58 (`waldo-live`) + 46 (`waldo-mirror`) passing on Waldo |
 
 **Still needed:**
 
@@ -130,6 +143,7 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
 ## Safety
 
 - Someone holds the hand controller or stays within reach of the arms' stop during every run.
-- No walking on the G1 (site rule). The G1 server has no walking tool.
+- No walking on the G1 (site rule). The G1 server has no walking tool; mirroring and dancing move only the arms and a little waist sway.
+- Arm motion (mirroring, dancing) runs only with the robot balancing, on the gantry, with a spotter on the controller (L1+A).
 - "Person within reach" shots and tests happen only with the arm parked or its motors off.
 - Waldo is shared: check with the bay owner before using the robot.
