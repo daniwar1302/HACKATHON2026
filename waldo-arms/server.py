@@ -1026,10 +1026,36 @@ def seven_segment(crop: np.ndarray, digits: int) -> tuple[str, list[float]]:
 @mcp.tool()
 def read_display(box: list[float], digits: int = 4, scale: str = "pixels") -> dict:
     """Read a 7-segment / LED digit display (dev-board code, timer, meter) inside a tight box [u1, v1, u2, v2] around
-    the digits on the head image. Deterministic and ~50 ms (no VLM). '?' marks a digit it couldn't decode: re-box or
-    look closer. For free text (labels, screens), use look and read it yourself."""
-    text, conf = seven_segment(_crop(_frame(), box, scale), int(digits))
-    return {"text": text, "digit_confidence": conf}
+    the digits on the head image: box just the lit digits, a few px of slack is fine (it decodes 81 slightly shifted
+    boxes and votes; a box much bigger than the digits misreads). ~70 ms, no VLM. agreement = share of clean decodes
+    that agree (>0.6 is solid); below that, check with look. For free text (labels, screens), use look and read it yourself."""
+    im = _frame()
+    H, W, _ = im.shape
+    try:
+        (u1, v1), (u2, v2) = (vision.to_pixels(float(box[0]), float(box[1]), scale, W, H),
+                              vision.to_pixels(float(box[2]), float(box[3]), scale, W, H))
+    except (ValueError, TypeError, IndexError):
+        raise ToolError("box is [u1, v1, u2, v2]; scale pixels, norm1000 or norm1")
+    # decode jittered boxes and vote: a few px either way clips or shifts segments (fitting the box to the lit
+    # pixels was tried: loose boxes pull in bright desk edges, and glowing segments have near-white cores)
+    votes: dict = {}
+    for d1 in (-3, 0, 3):
+        for d2 in (-3, 0, 3):
+            for d3 in (-3, 0, 3):
+                for d4 in (-3, 0, 3):
+                    try:
+                        text, conf = seven_segment(_crop(im, [u1 + d1, v1 + d2, u2 + d3, v2 + d4], "pixels"), int(digits))
+                    except ToolError:
+                        continue
+                    if "?" not in text:
+                        votes.setdefault(text, []).append(min(conf))
+    if not votes:
+        text, conf = seven_segment(_crop(im, [u1, v1, u2, v2], "pixels"), int(digits))
+        return {"text": text, "agreement": 0.0, "note": "no clean decode: box the digits (just the lit segments) and retry"}
+    best = max(votes, key=lambda t: (len(votes[t]), max(votes[t])))
+    total = sum(len(v) for v in votes.values())
+    return {"text": best, "agreement": round(len(votes[best]) / total, 2),
+            "alternatives": {t: len(v) for t, v in sorted(votes.items(), key=lambda kv: -len(kv[1]))[1:3]}}
 
 
 def _gauges() -> dict:
