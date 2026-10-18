@@ -17,6 +17,20 @@ agent can check its own work.
 | `park` | lift, then go to the ready pose `[0.28, ±0.20, 0.05]` |
 | `look(camera)` | one JPEG from `head_camera` (the robot's view) or `waldo_webcam` |
 
+**Codifying what works into routines:**
+
+| Tool | What it does |
+|------|--------------|
+| `recorded_steps` / `clear_recording` | every successful `move_hand`, `gripper`, `set_table`, `park` this session, as JSON steps |
+| `save_routine(name, description, steps?)` | keep the recording (or steps the LLM writes) as `routines/<name>.json`, every step validated |
+| `list_routines` / `show_routine(name)` | what's saved, and the full step list |
+| `run_routine(name, dry_run=true)` | dry run checks every step's bounds and reach without moving; `dry_run=false` refuses up front if any step is unreachable, then replays in order and stops at the first refused step |
+
+Step format (readable and hand-editable):
+`{"op":"move_hand","side":"left","xyz":[0.30,0.20,0.10],"seconds":3}` · `{"op":"gripper","side":"left","action":"close"}` ·
+`{"op":"wait","seconds":1}` · `{"op":"park"}` · `{"op":"set_table","z":-0.10}`.
+So the loop is: try a task with the tools → when it works, `save_routine` → next time, `run_routine`.
+
 Frame: pelvis, metres, **x forward, y left, z up**. Reachable box x 0.10–0.60, y ±0.55, z −0.35–0.45.
 Refusals (unreachable, outside the box, below the table, server down) come back to the agent with the reason.
 
