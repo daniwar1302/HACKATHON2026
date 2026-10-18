@@ -21,6 +21,10 @@ first motion with a hand near STOP.
    `G1_JOINT_SPEED=0.6` halves replay speed until the cell is trusted. Keep `G1_TAUGHT_DIR` separate from the sim's
    taught files (sim millimetres are not the real desk's).
 
+5. **Preflight** (read-only, no motion): `uv run --with "mcp>=2.2" --with mujoco --with pyzmq --with numpy --with pillow
+   waldo-arms/preflight.py` with the same env. It checks arm_server + FSM, camera, camera config, depth, the desk height
+   seen through depth, the planner's assets and the taught files, and prints the fix for anything that fails.
+
 ## 1. Check the eyes
 * `status` (FSM, arm_server up), `look` (annotated): the **L/R dots must sit on the real grippers**. If they're off,
   stop here: the camera model or the waist angles are wrong, and every point → xyz will be off by the same amount.
