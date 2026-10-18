@@ -1,4 +1,13 @@
+<!-- YC logo source: https://www.ycombinator.com/press -->
+[![Y Combinator](docs/assets/yc-logo.png)](https://events.ycombinator.com/MakeSomethingAgentsWant)
+
 # HACKATHON2026: Waldo
+
+Built for [Make Something Agents Want](https://events.ycombinator.com/MakeSomethingAgentsWant),
+a hackathon hosted by YC teams in San Francisco on **October 17–18, 2026**. The challenge: build
+products with AI agents as their users, from MCP tools to communication infrastructure. Waldo brings
+that idea to robotics: agents can operate hardware, watch for problems, call a human for help,
+and remember what worked.
 
 **Waldo gives an AI agent eyes that react in a tenth of a second, a phone number to call you when it's unsure,
 and a memory so it needs you less each time.**
