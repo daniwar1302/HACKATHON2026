@@ -242,7 +242,7 @@ class Planner:
         jaws = range(0, 180, 30) if round_item else [jaw_deg + o for o in self.JAW_OFFSETS]
         grip_z = z - (0.002 if height_m < 0.025 else 0.0)        # centre height, 2 mm lower for thin items
         if height_m > 0.06:          # tall: grip 3 cm under the top, or the palm reaches the top first and tips it
-            grip_z = z + height_m / 2 - 0.03
+            grip_z = z + height_m / 2 - 0.03                # (4.5 cm under it was tried: far more unreachable / toppled)
         out = []
         for i, jaw in enumerate(jaws):
             hd = math.radians(heading_for(jaw, side))
@@ -432,7 +432,10 @@ class Planner:
             t[long_ax] += f * half
             try:
                 self.stage("carry over", lambda: self.lin(side, t, R, speed=0.12))
-                for z in (z_drop, (z_drop + z_carry) / 2):     # as low as reachable; else drop from carry height
+                # as low as reachable: a tall item stood on the container floor (dropped from above the rim it topples
+                # and rolls out), else just above the rim, else from halfway; the fingers' own clearance is the check
+                z_floor = lo[2] + below + 0.012
+                for z in ([z_floor] if z_floor < z_drop - 0.01 else []) + [z_drop, (z_drop + z_carry) / 2]:
                     try:
                         self.lin(side, [t[0], t[1], z], R, speed=0.06, contact=True)
                         break
@@ -457,7 +460,7 @@ class Planner:
                 self.stage("release in", lambda: self.lin(side, h, self.R[side], speed=0.05, contact=True))
             except PlanError:
                 pass
-        try:
+        try:      # (backing out along the fingers was tried: it drags tall items onto the near rim)
             self.stage("release up", lambda: self.lin(side, [h[0], h[1], h[2] + 0.08], self.R[side], speed=0.08, contact=True))
         except PlanError:
             pass
