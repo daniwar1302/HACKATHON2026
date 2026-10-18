@@ -80,8 +80,9 @@ class Devices:
         self.presses = {"security_key": 0, "start_button": 0}
         self._pressed = {"security_key": False, "start_button": False}
         self.power_on_t = 0.0
+        self.hung = getattr(self, "seed", 0) % 2 == 1      # odd seeds: router up but its internet is down until power-cycled
         self.state = self.read()
-        self.state["internet"] = True
+        self.state["internet"] = not self.hung
 
     def read(self):
         q = self.d.qpos
@@ -95,9 +96,11 @@ class Devices:
             self.history.append((round(t, 2), "router power ON" if now["strip_on"] else "router power OFF"))
             if now["strip_on"]:
                 self.power_on_t = t
+            else:
+                self.hung = False                           # a power cycle clears the hang
         if now["light_on"] != self.state["light_on"]:
             self.history.append((round(t, 2), "light ON" if now["light_on"] else "light OFF"))
-        internet = now["strip_on"] and (t - self.power_on_t >= self.BOOT_S or self.state.get("internet") and now["strip_on"] == self.state["strip_on"])
+        internet = not self.hung and now["strip_on"] and (t - self.power_on_t >= self.BOOT_S or self.state.get("internet") and now["strip_on"] == self.state["strip_on"])
         if internet and not self.state.get("internet"):
             self.history.append((round(t, 2), "router internet UP"))
         now["internet"] = bool(internet)

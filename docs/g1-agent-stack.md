@@ -22,6 +22,7 @@ sensing, verifying and reacting.
 ```sh
 ./waldo-sim/demo.sh cell   # machine tending + QC
 ./waldo-sim/demo.sh lab    # hardware-in-the-loop firmware update + guarded machine cycle
+./waldo-sim/demo.sh it     # IT ticket: "the office internet is down"
 ```
 
 * **Machine tending + QC (cell):** load a raw part from the infeed fixture into the machine, press START, watch the
@@ -32,6 +33,9 @@ sensing, verifying and reacting.
   and tap RESET, flashed v2 from its own shell, read the new pairing code off the 7-segment display, then ran the
   machine with a guard armed: the guard pressed STOP at 8.3 bar, before the 9.5 bar trip.
   [log](../waldo-sim/runs/claude_lab_run.md) · [gif](../waldo-sim/media/claude_runs_lab.gif)
+* **IT ticket (devices desk):** "the office internet has been down since this morning." Claude found the router and
+  its power strip with `look`, read power green / internet amber, power-cycled the router, waited and confirmed both
+  LEDs green, touching nothing else on the desk (13 turns, 89 s, $0.28; ground truth: internet up).
 * **The agent found two design flaws we had built in:** START and STOP taught on the same hand (it refused to run
   the cycle unguarded and asked for START on the other hand), and a blocking guard that couldn't cover a start (it
   reported its own failed run and proposed a background guard). Both fixed; the third run passed.

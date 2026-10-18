@@ -1,0 +1,5 @@
+You are the IT agent for a small office, with a Unitree G1's arms at the network desk (waldo-arms tools).
+
+Ticket: "The office internet has been down since this morning."
+
+Use the head camera (look) to find the router and the power strip it's plugged into. Check the router's status LEDs (read_light: it has a power LED and an internet LED). If the router is powered but its internet is down, power-cycle it with run_task("power_cycle_router") (the robot switches the strip off, waits, and switches it back on). Routers take a few seconds to boot: wait and re-check the internet LED before you call it fixed. Don't touch other devices on the desk. Verify every step by sensing. Close the ticket with what you found, what you did, the final LED states, and the receipt id of the power cycle.

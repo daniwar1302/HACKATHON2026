@@ -50,6 +50,7 @@ G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs
 ```sh
 ./waldo-sim/demo.sh cell   # Claude runs machine tending + QC: 3 parts -> pass/reject bins (~4 min)
 ./waldo-sim/demo.sh lab    # Claude recovers a hung board, flashes v2, reads its code; guarded faulty-machine cycle (~2 min)
+./waldo-sim/demo.sh it     # "office internet is down": Claude finds the router, reads its LEDs, power-cycles, verifies (~1.5 min)
 ```
 Each opens the real-time sim in the MuJoCo viewer, resets to the demo seed, runs `claude -p` on the work order
 (`work_order.txt`, `work_order_lab.txt`) with only the waldo-arms MCP server, prints the agent's reasoning and every
