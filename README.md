@@ -76,6 +76,7 @@ need most of it.
 | [`waldo-ask/`](waldo-ask/) | MCP server for asking the operator by email, iMessage, SMS or phone, with the hint memory |
 | [`waldo-mcp/`](waldo-mcp/) | MCP server for the G1 humanoid over the Unitree SDK: stand, gestures, stop, cameras (no walking) |
 | [`waldo-arms/`](waldo-arms/) | **MCP server for the G1's hands and grippers** through `arm_server` (IK, collision and table checks): `move_hand`, `gripper`, `check_reach`, `look`, … |
+| [`waldo-sim/`](waldo-sim/) | **MuJoCo G1 that speaks the real robot's protocols**: run `waldo-arms`, agents and VLMs against it unchanged; `bench_pick.py` scores picks on ground truth |
 | [`waldo-console/`](waldo-console/) | Laptop-side G1 controls: browser console, virtual XR controllers for teleop (legacy manual mode), a second MCP (speech, LED, volume, session queue), arm_server client |
 | [`waldo-call/`](waldo-call/) | One-shot test call through Inkbox's hosted voice agent |
 | [`docs/quickstart.md`](docs/quickstart.md) | **Start here:** access, cameras, robot modes, and how to run every piece |
