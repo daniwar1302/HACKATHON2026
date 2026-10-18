@@ -8,7 +8,7 @@ case "$1" in
   brain) cmd="brain serve"; py="brain.py" ;;
   *) echo "usage: $0 bus|watcher|bridge|brain"; exit 1 ;;
 esac
-pane=$(tmux list-panes -t waldo -F "#{pane_id} #{pane_title}" | awk -v t="$1" '$2==t{print $1}')
+pane=$(tmux list-panes -s -t waldo -F "#{pane_id} #{pane_title}" | awk -v t="$1" '$2==t{print $1}')
 [ -n "$pane" ] || { echo "no '$1' pane; run ./start.sh"; exit 1; }
 pkill -f "/waldo-live/.venv/bin/python $py" 2>/dev/null  # a pane piped through grep can leave python running
 sleep 1
