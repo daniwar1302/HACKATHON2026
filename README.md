@@ -9,7 +9,24 @@ products with AI agents as their users, from MCP tools to communication infrastr
 that idea to robotics: agents can operate hardware, watch for problems, call a human for help,
 and remember what worked.
 
-![Waldo moving its arms in the lab — excerpt from the original video](docs/assets/waldo-lab.gif)
+<!-- Official Inkbox mark and wordmark: https://inkbox.ai/ -->
+<table>
+  <tr>
+    <td align="center" valign="middle" width="220">
+      <a href="https://inkbox.ai/"><img src="docs/assets/inkbox-logo.png" alt="Inkbox" width="200"></a><br>
+      <strong>Waldo’s phone connection</strong>
+    </td>
+    <td align="center" valign="middle" width="140">
+      <strong>Calls + iMessage</strong><br>
+      <img src="docs/assets/inkbox-arrow.png" alt="connects to" width="110"><br>
+      Ask for help.<br>Receive instructions.
+    </td>
+    <td align="center" valign="middle" width="280">
+      <img src="docs/assets/waldo-lab.gif" alt="Waldo moving its arms in the lab — excerpt from the original video" width="260"><br>
+      <strong>Waldo · Unitree G1</strong>
+    </td>
+  </tr>
+</table>
 
 **Waldo gives an AI agent eyes that react in a tenth of a second, a phone number to call you when it's unsure,
 and a memory so it needs you less each time.**
