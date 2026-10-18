@@ -45,6 +45,17 @@ uv run --with mujoco --with pyzmq --with numpy waldo-sim/bench_sort.py --trials 
 Any MCP client can drive it through `waldo-arms` with `G1_ARM_ADDR=tcp://localhost:15810 G1_CAM_BASE=http://localhost:18766
 G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs a GL context (`glfw` in a desktop session).
 
+## Live demo (one command each)
+
+```sh
+./waldo-sim/demo.sh cell   # Claude runs machine tending + QC: 3 parts -> pass/reject bins (~4 min)
+./waldo-sim/demo.sh lab    # Claude recovers a hung board, flashes v2, reads its code; guarded faulty-machine cycle (~2 min)
+```
+Each opens the real-time sim in the MuJoCo viewer, resets to the demo seed, runs `claude -p` on the work order
+(`work_order.txt`, `work_order_lab.txt`) with only the waldo-arms MCP server, prints the agent's reasoning and every
+tool call live, then the sim's ground truth to check its report against. `DEMO_NO_VIEWER=1` runs headless.
+Recordings if live isn't possible: `media/claude_runs_cell.gif`, `media/claude_runs_lab.gif`.
+
 ## Scenes
 
 `--scene cell` is the industrial one: **machine tending + quality check**. Raw aluminium parts stand in an infeed

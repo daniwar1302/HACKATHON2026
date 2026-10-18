@@ -252,7 +252,8 @@ LAB_TASKS = {
     "stop_machine": [("machine_stop", 0.0, "poke")],      # from the hover if armed (fast), else from rest
     "disarm_stop": [("machine_stop", 0.0, "rest")],
 }
-CELL_CONTROLS = {k: LAB_CONTROLS[k] for k in ("machine_start", "machine_stop")}
+CELL_CONTROLS = {"machine_start": LAB_CONTROLS["machine_start"][:2],   # any hand: no STOP watch in the cell, and the
+                 "machine_stop": LAB_CONTROLS["machine_stop"]}           # right hand is twice as fast to START
 CELL_TASKS = {k: LAB_TASKS[k] for k in ("start_cycle", "stop_machine", "arm_stop", "disarm_stop")}
 SCENES = {"devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json"),
           "cell": (CELL_CONTROLS, CELL_TASKS, HERE / "taught_cell.json")}

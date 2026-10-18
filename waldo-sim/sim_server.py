@@ -250,7 +250,7 @@ class CellDevices:
     and the QC lamp shows PASS (green) or REJECT (red) while it sits in the nest. Pulling a part mid-cycle faults.
     One part per seed is out of tolerance (part{seed % 3})."""
     OFF, GREEN, RED, YELLOW = LabDevices.OFF, LabDevices.GREEN, LabDevices.RED, LabDevices.YELLOW
-    CYCLE_S = 8.0
+    CYCLE_S = 12.0
 
     def __init__(self, m, d, items):
         self.m, self.d, self.items = m, d, items
