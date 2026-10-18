@@ -999,7 +999,9 @@ def _crop(im, box, scale):
 SEGMENTS = {"a": (0.5, 0.1), "b": (0.85, 0.3), "c": (0.85, 0.7), "d": (0.5, 0.9), "e": (0.15, 0.7), "f": (0.15, 0.3), "g": (0.5, 0.5)}
 SEG_CHARS = {"abcdef": "0", "bc": "1", "abdeg": "2", "abcdg": "3", "bcfg": "4", "acdfg": "5", "acdefg": "6", "abc": "7",
              "abcdefg": "8", "abcdfg": "9", "g": "-", "cdefg": "b", "cdeg": "o", "defg": "t", "": " ", "adefg": "E",
-             "aefg": "F", "bcefg": "H", "def": "L", "abefg": "P", "bcdef": "U"}
+             "aefg": "F", "bcefg": "H", "def": "L", "abefg": "P", "bcdef": "U", "eg": "r", "bcdeg": "d", "ceg": "n",
+             "abcef": "n", "cde": "u"}
+# (on a 7-segment display 'g' and '9' are the same glyph, as are 'S' and '5', 'O' and '0': read words with that in mind)
 
 
 def seven_segment(crop: np.ndarray, digits: int) -> tuple[str, list[float]]:
@@ -1027,7 +1029,8 @@ def seven_segment(crop: np.ndarray, digits: int) -> tuple[str, list[float]]:
 def read_display(box: list[float], digits: int = 4, scale: str = "pixels") -> dict:
     """Read a 7-segment / LED digit display (dev-board code, timer, meter) inside a tight box [u1, v1, u2, v2] around
     the digits on the head image: box just the lit digits, a few px of slack is fine (it decodes 81 slightly shifted
-    boxes and votes; a box much bigger than the digits misreads). ~70 ms, no VLM. agreement = share of clean decodes
+    boxes and votes; a box much bigger than the digits misreads). ~70 ms, no VLM. 7-segment glyphs are ambiguous by
+    design: '9' may be 'g' ("9ood" = "good"), '5' may be 'S', '0' may be 'O'. agreement = share of clean decodes
     that agree (>0.6 is solid); below that, check with look. For free text (labels, screens), use look and read it yourself."""
     im = _frame()
     H, W, _ = im.shape

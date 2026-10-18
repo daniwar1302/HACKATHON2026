@@ -2,6 +2,7 @@
 # Live demo: Claude runs a cell through the waldo-arms MCP tools, in a real-time MuJoCo sim with the viewer open.
 #   ./demo.sh cell    machine tending + QC (3 parts -> pass / reject bins)
 #   ./demo.sh it      the office internet is down: find the router, read its LEDs, power-cycle, verify
+#   ./demo.sh rack    SRE page: read the server's error code, follow the runbook (hard reset / reseat a drive), verify
 #   ./demo.sh lab     hung dev board -> bootloader -> flash v2 -> read code; guarded machine cycle (faulty machine)
 # Needs: assets fetched (./fetch_assets.sh), a desktop session (MuJoCo viewer), the claude CLI logged in.
 set -euo pipefail
@@ -10,8 +11,9 @@ which=${1:-cell}
 case "$which" in
   cell) off=1000; seed=1; mcp=mcp_cell.json; order=work_order.txt; tools=(mcp__waldo-arms) ;;
   lab)  off=1100; seed=3; mcp=mcp_lab.json;  order=work_order_lab.txt; tools=(mcp__waldo-arms "Bash(uv run --no-project --with pyzmq usb_flash.py:*)") ;;
+  rack) off=1400; seed=1; mcp=mcp_rack.json; order=work_order_rack.txt; tools=(mcp__waldo-arms) ;;
   it)   off=1200; seed=1; mcp=mcp_it.json;   order=work_order_it.txt; tools=(mcp__waldo-arms) ;;
-  *) echo "usage: $0 cell|lab|it"; exit 1 ;;
+  *) echo "usage: $0 cell|lab|it|rack"; exit 1 ;;
 esac
 port=$((15810 + off))
 viewer=--viewer; [ -n "${DEMO_NO_VIEWER:-}" ] && viewer=""      # DEMO_NO_VIEWER=1: headless (testing)

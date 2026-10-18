@@ -51,6 +51,7 @@ G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs
 ./waldo-sim/demo.sh cell   # Claude runs machine tending + QC: 3 parts -> pass/reject bins (~4 min)
 ./waldo-sim/demo.sh lab    # Claude recovers a hung board, flashes v2, reads its code; guarded faulty-machine cycle (~2 min)
 ./waldo-sim/demo.sh it     # "office internet is down": Claude finds the router, reads its LEDs, power-cycles, verifies (~1.5 min)
+./waldo-sim/demo.sh rack   # SRE page: Claude reads the server's error code + drive LEDs, reseats the failed drive (~1 min)
 ```
 Each opens the real-time sim in the MuJoCo viewer, resets to the demo seed, runs `claude -p` on the work order
 (`work_order.txt`, `work_order_lab.txt`) with only the waldo-arms MCP server, prints the agent's reasoning and every
@@ -97,6 +98,13 @@ while agents think, so machines finish cycles and routers boot between tool call
 faulty machine): over three runs Claude found two real design flaws (START and STOP taught on the same hand; a
 blocking guard can't cover a start), both fixed; run 3 flashed v2, read the code 0856, and its background guard
 stopped the faulty machine at 8.3 bar (trip 9.5), all matching ground truth.
+
+**Datacenter remote hands** (`--scene rack`): a server whose front panel shows `good`, `Er01` (hung: hold power
+4 s, then power on) or `Er42` (a drive offline: press its latch, the caddy pops out, push it home to reseat), with
+status and per-drive LEDs. Runbook tasks taught + replayed: 12/12. Claude on an SRE page (`work_order_rack.txt`):
+read Er42, found the red drive, reseated only that one, didn't hard-reset a merely degraded host, verified all
+green: matches ground truth (13 turns, 41 s, $0.26). Panel controls sit off the robot's midline: pressing straight
+ahead at y = 0 has no collision-free arm pose.
 
 The others: `--scene sort` (desk + containers + items), `--scene devices` (IT desk: power strip, router, 2FA key,
 start button, light switch), `--scene lab`:

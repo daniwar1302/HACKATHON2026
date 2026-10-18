@@ -176,7 +176,11 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             wb.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=[lx + sx, ly + sy, (desk.top_z - 0.03 + FLOOR_Z) / 2],
                         size=[0.02, 0.02, (desk.top_z - 0.03 - FLOOR_Z) / 2], rgba=[0.45, 0.32, 0.2, 1])
 
-    if devices == "cell":
+    if devices == "rack":
+        add_rack(spec, desk)
+        for housing, part in RACK_PARTS:
+            spec.add_exclude(bodyname1=housing, bodyname2=part)
+    elif devices == "cell":
         add_cell(spec, desk, twin)
         for housing, part in CELL_PARTS_BODIES:
             spec.add_exclude(bodyname1=housing, bodyname2=part)
@@ -288,7 +292,8 @@ LAB = {
 LAB_PARTS = [("dev_board", "dev_board_boot"), ("dev_board", "dev_board_reset"),
              ("machine", "machine_start"), ("machine", "machine_stop")]
 SEG = {"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc", "5": "afgcd", "6": "afgedc", "7": "abc",
-       "8": "abcdefg", "9": "abcdfg", "-": "g", "b": "fgedc", "o": "gcde", "t": "fged", " ": ""}
+       "8": "abcdefg", "9": "abcdfg", "-": "g", "b": "fgedc", "o": "gcde", "t": "fged", " ": "",
+       "E": "adefg", "r": "eg", "g": "abcdfg", "d": "bcdeg"}
 DIGIT_W, DIGIT_H = 0.013, 0.022     # one 7-segment digit on the board (y across, x up the image)
 
 
@@ -338,6 +343,53 @@ def stack_light(wb, xy, top, material):
     for k, lamp in enumerate(("green", "yellow", "red")):
         b.add_geom(name=f"stack_light_{lamp}", type=cyl, size=[0.017, 0.012, 0], pos=[0, 0, 0.097 + 0.025 * k],
                    rgba=[0.04, 0.04, 0.04, 1], material=material)
+
+
+# ---- rack: datacenter remote hands (server front panel, power button, hot-swap drive bays) ----
+RACK = {"server": ((0.43, 0.0), "server chassis, front panel facing the robot: 7-segment status ('good', or an error "
+                   "code: Er01 = hung, Er42 = a drive offline), status LED, power button (hold 4 s = hard off, tap = on), "
+                   "two drive bays (latch button pops the caddy out; push it home to reseat), each with an LED")}
+RACK_FRONT_X = 0.37                       # the panel's plane (pelvis x)
+RACK_PARTS = [("server", "server_power"), ("server", "server_drive0_latch"), ("server", "server_drive1_latch"),
+              ("server", "server_drive0"), ("server", "server_drive1")]
+
+
+def add_rack(spec, desk: "Desk"):
+    wb, top = spec.worldbody, desk.top_z
+    g = glow(spec)
+    box, cyl = mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER
+    nocol = dict(contype=0, conaffinity=0)
+    (x, y), _ = RACK["server"]
+    hx = x - RACK_FRONT_X                 # half depth: the front face sits at RACK_FRONT_X
+    b = wb.add_body(name="server", pos=[x, y, top + 0.045])
+    b.add_geom(type=box, size=[hx, 0.13, 0.045], rgba=[0.22, 0.23, 0.26, 1])
+    fx = -hx                              # front face, local
+    along_x = [0.7071068, 0, 0.7071068, 0]   # cylinder axis along x (pointing at the robot)
+    # status panel: 4 x 7-segment digits, centred on the front
+    b.add_geom(type=box, size=[0.0006, 0.036, 0.016], pos=[fx - 0.0006, 0.0, 0.018], rgba=[0.03, 0.03, 0.03, 1], **nocol)
+    for dgt in range(4):
+        cy = 0.0255 - dgt * 0.017       # centred: the midline is for reading only (an arm can't press straight ahead there)
+        for sname, ((u, v), horiz) in seg_layout().items():
+            py, pz = cy - u * DIGIT_W, 0.018 + v * DIGIT_H
+            size = [0.0004, DIGIT_W * 0.38, 0.0012] if horiz else [0.0004, 0.0012, DIGIT_H * 0.2]
+            b.add_geom(name=f"server_seg{dgt}{sname}", type=box, size=size, pos=[fx - 0.0013, py, pz], rgba=[0.05, 0.01, 0.01, 1], material=g, **nocol)
+    b.add_geom(name="server_led", type=box, size=[0.0008, 0.005, 0.005], pos=[fx - 0.0008, 0.0, -0.008], rgba=[0.04, 0.04, 0.04, 1], material=g, **nocol)
+    # power button (pushes in along +x)
+    pw = b.add_body(name="server_power", pos=[fx - 0.004, 0.085, 0.018], quat=along_x)       # left hand
+    pw.add_joint(name="server_power", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[0, 0.004], stiffness=250, damping=2, springref=0)   # local z = world +x: pushed in
+    pw.add_geom(type=cyl, size=[0.009, 0.004, 0], rgba=[0.75, 0.75, 0.78, 1], mass=0.003)
+    # drive bays: caddy (slides out toward the robot, friction-held) + latch button + LED on the caddy face
+    for k, dy in enumerate((-0.07, -0.115)):                                                   # right hand
+        cad = b.add_body(name=f"server_drive{k}", pos=[fx - 0.003, dy, 0.012])
+        cad.add_joint(name=f"server_drive{k}", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[-1, 0, 0], range=[0, 0.035],
+                      frictionloss=0.4, damping=2, armature=0.01)
+        cad.add_geom(type=box, size=[0.003, 0.021, 0.017], rgba=[0.12, 0.12, 0.13, 1], mass=0.05)
+        cad.add_geom(name=f"server_drive{k}_led", type=box, size=[0.0008, 0.003, 0.003], pos=[-0.0035, 0.014, 0.010],
+                     rgba=[0.04, 0.04, 0.04, 1], material=g, **nocol)
+        la = b.add_body(name=f"server_drive{k}_latch", pos=[fx - 0.003, dy, -0.022], quat=along_x)
+        la.add_joint(name=f"server_drive{k}_latch", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[0, 0.003],
+                     stiffness=300, damping=2, springref=0)
+        la.add_geom(type=cyl, size=[0.006, 0.003, 0], rgba=[0.95, 0.6, 0.1, 1], mass=0.002)
 
 
 # ---- cell: machine tending + QC, the industrial pick-and-place (fixtured parts, not desk clutter) ----

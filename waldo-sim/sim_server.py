@@ -346,11 +346,118 @@ class CellDevices:
         return {k: {"point": top(k), "push": [0, 0, -1]} for k in ("machine_start", "machine_stop")}
 
 
+class RackDevices:
+    """Datacenter server: seed % 3 == 0 hung (Er01: hold power 4 s, then tap to boot), 1 / 2: drive 0 / 1 offline (Er42:
+    press its latch, the caddy pops out, push it home: it rebuilds). Status: good / Er01 / Er42 / boot / blank (off)."""
+    OFF, GREEN, RED, AMBER, BLUE = LabDevices.OFF, LabDevices.GREEN, LabDevices.RED, [1.0, 0.6, 0.05, 1], LabDevices.BLUE
+    SEG_ON, SEG_OFF = LabDevices.SEG_ON, LabDevices.SEG_OFF
+    HOLD_OFF_S, BOOT_S, REBUILD_S, EJECT_M = 4.0, 4.0, 2.0, 0.03
+
+    def __init__(self, m, d):
+        self.m, self.d = m, d
+        j = lambda n: (m.joint(n).qposadr[0], m.joint(n).dofadr[0])
+        self.q = {k: j(f"server_{k}") for k in ("power", "drive0_latch", "drive1_latch", "drive0", "drive1")}
+        self.g = {"led": m.geom("server_led").id, "d0": m.geom("server_drive0_led").id, "d1": m.geom("server_drive1_led").id,
+                  "seg": {(k, sn): m.geom(f"server_seg{k}{sn}").id for k in range(4) for sn in "abcdefg"}}
+        self.bodies = {b for b in range(m.nbody) if m.body(b).name.startswith("server")}
+        self.seed = 0
+        self.reset()
+
+    def reset(self):
+        for a, _ in self.q.values():
+            self.d.qpos[a] = 0.0
+        f = self.seed % 3
+        self.server = "hung" if f == 0 else "degraded"
+        self.drives = ["ok", "ok"]
+        if f:
+            self.drives[f - 1] = "fault"
+        self.history, self.presses = [], {"power_button": 0, "drive0_latch": 0, "drive1_latch": 0}
+        self._pressed = {k: False for k in self.presses}
+        self.power_t, self.boot_t, self.rebuild_t, self.out = None, 0.0, [None, None], [False, False]
+        self.shown = None
+        self.state = self.read()
+
+    def read(self):
+        return {"server": self.server, "display": self.display(), "drives": list(self.drives),
+                "caddy_out_mm": [round(float(self.d.qpos[self.q[f"drive{k}"][0]]) * 1000) for k in (0, 1)]}
+
+    def display(self):
+        return {"good": "good", "hung": "Er01", "degraded": "Er42", "booting": "boot", "off": "    "}[self.server]
+
+    def update(self):
+        d, t = self.d, self.d.time
+        for k, key, th in (("power_button", "power", 0.002), ("drive0_latch", "drive0_latch", 0.0015), ("drive1_latch", "drive1_latch", 0.0015)):
+            down = d.qpos[self.q[key][0]] > th
+            if down and not self._pressed[k]:
+                self.presses[k] += 1
+                self.history.append((round(t, 2), f"{k} pressed"))
+                if k == "power_button":
+                    self.power_t = t
+                else:
+                    self._eject(int(k[5]), t)
+            if not down and self._pressed[k] and k == "power_button":
+                held = t - (self.power_t or t)
+                if self.server == "off" and held < 2.0:
+                    self.server, self.boot_t = "booting", t
+                    self.history.append((round(t, 2), "power on: booting"))
+                self.power_t = None
+            self._pressed[k] = down
+        if self.power_t is not None and self.server != "off" and t - self.power_t >= self.HOLD_OFF_S:
+            self.server = "off"
+            self.history.append((round(t, 2), "hard power off (held 4 s)"))
+        if self.server == "booting" and t - self.boot_t >= self.BOOT_S:
+            self.server = "good" if all(s == "ok" for s in self.drives) else "degraded"
+            self.history.append((round(t, 2), f"boot complete: {self.display()}"))
+        for k in (0, 1):
+            q = d.qpos[self.q[f"drive{k}"][0]]
+            if self.out[k] and q < 0.003:                           # pushed home: rebuild
+                self.out[k], self.rebuild_t[k] = False, t
+                self.drives[k] = "rebuild"
+                self.history.append((round(t, 2), f"drive{k} seated: rebuilding"))
+            if self.drives[k] == "rebuild" and t - self.rebuild_t[k] >= self.REBUILD_S:
+                self.drives[k] = "ok"
+                self.history.append((round(t, 2), f"drive{k} online"))
+        if self.server in ("good", "degraded"):
+            self.server = "good" if all(s == "ok" for s in self.drives) else "degraded"
+        self.state = self.read()
+        self._paint()
+
+    def _eject(self, k, t):
+        a, v = self.q[f"drive{k}"]
+        self.d.qpos[a], self.d.qvel[v] = self.EJECT_M, 0.0
+        self.out[k], self.drives[k] = True, "out"
+        self.history.append((round(t, 2), f"drive{k} ejected"))
+
+    def _paint(self):
+        key = (self.server, tuple(self.drives))
+        if key == self.shown:
+            return
+        self.shown = key
+        rgba = self.m.geom_rgba
+        rgba[self.g["led"]] = {"good": self.GREEN, "hung": self.AMBER, "degraded": self.AMBER, "booting": self.BLUE}.get(self.server, self.OFF)
+        for k in (0, 1):
+            rgba[self.g[f"d{k}"]] = self.OFF if self.server == "off" else {"ok": self.GREEN, "rebuild": self.AMBER}.get(self.drives[k], self.RED)
+        for k, ch in enumerate(self.display()):
+            for sn in "abcdefg":
+                rgba[self.g["seg"][(k, sn)]] = self.SEG_ON if sn in scene.SEG[ch] else self.SEG_OFF
+
+    def targets(self):
+        m, d = self.m, self.d
+        def face(body, local):
+            b = m.body(body).id
+            return (d.xpos[b] + d.xmat[b].reshape(3, 3) @ np.asarray(local, float)).round(4).tolist()
+        out = {"power_button": {"point": face("server_power", [0, 0, -0.004]), "push": [1, 0, 0]}}
+        for k in (0, 1):
+            out[f"drive{k}_latch"] = {"point": face(f"server_drive{k}_latch", [0, 0, -0.003]), "push": [1, 0, 0]}
+            out[f"drive{k}_caddy"] = {"point": face(f"server_drive{k}", [-0.003, 0, 0]), "push": [1, 0, 0]}
+        return out
+
+
 class Sim:
     def __init__(self, speed: float, desk: scene.Desk, item_set: str = "big", kind: str = "sort"):
         self.desk, self.item_set, self.kind = desk, item_set, kind
         self.item_defs = scene.CELL_PARTS if kind == "cell" else scene.ITEMS
-        self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab") else
+        self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab", "rack") else
                   scene.build(desk, items=scene.CELL_PARTS, containers={}, devices="cell") if kind == "cell" else scene.build(desk))
         self.d = mujoco.MjData(self.m)
         self.speed = speed
@@ -365,12 +472,12 @@ class Sim:
         self.site = {s: m.site(f"{s}_grasp").id for s in SIDES}
         self.arm_bodies = {s: {b for b in range(m.nbody) if m.body(b).name.startswith(s) and any(
             k in m.body(b).name for k in ("shoulder", "elbow", "wrist", "dex1"))} for s in SIDES}
-        self.items = {} if kind in ("devices", "lab") else {n: scene.item_body(m, n) for n in self.item_defs}
+        self.items = {} if kind in ("devices", "lab", "rack") else {n: scene.item_body(m, n) for n in self.item_defs}
         self.dev = (Devices(m, self.d) if kind == "devices" else LabDevices(m, self.d) if kind == "lab" else
-                    CellDevices(m, self.d, self.items) if kind == "cell" else None)
+                    CellDevices(m, self.d, self.items) if kind == "cell" else RackDevices(m, self.d) if kind == "rack" else None)
         self.item_qadr = {n: m.jnt_qposadr[m.body_jntadr[b]] for n, b in self.items.items()}
         self.item_dadr = {n: m.jnt_dofadr[m.body_jntadr[b]] for n, b in self.items.items()}
-        self.containers = ({} if kind in ("devices", "lab") else {n: m.body(n).id for n in ("nest", "pass_bin", "reject_bin")}
+        self.containers = ({} if kind in ("devices", "lab", "rack") else {n: m.body(n).id for n in ("nest", "pass_bin", "reject_bin")}
                            if kind == "cell" else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS})
         self.static_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] == 0 or m.geom_bodyid[g] in self.containers.values()}
         mujoco.mj_forward(m, self.d)
@@ -826,6 +933,7 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
             raise ValueError("not the devices scene (start with --scene devices)")
         notes = ({n: note for n, (_p, note) in scene.LAB.items()} if sim.kind == "lab" else
                  {n: note for n, (_p, note) in scene.CELL.items()} if sim.kind == "cell" else
+                 {n: note for n, (_p, note) in scene.RACK.items()} if sim.kind == "rack" else
                  {n: note for n, (_k, _p, note) in scene.DEVICES.items()})
         return {"scene": sim.kind, "state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
                 "targets": sim.dev.targets(), "time": round(sim.d.time, 2), "devices": notes}
@@ -894,7 +1002,7 @@ def main():
     ap.add_argument("--desk-top", type=float, default=scene.Desk.top_z, help="desk top z in the pelvis frame (m)")
     ap.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer window (watch it live)")
     ap.add_argument("--items", default="big", choices=sorted(scene.ITEM_SETS), help="item set desks are drawn from")
-    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab", "cell"],
+    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab", "cell", "rack"],
                     help="desk sorting, IT switches/buttons, or lab (dev board + machine tending)")
     ap.add_argument("--port-offset", type=int, default=0, help="add to every port (run several sims side by side)")
     a = ap.parse_args()

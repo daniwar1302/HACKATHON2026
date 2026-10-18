@@ -252,12 +252,24 @@ LAB_TASKS = {
     "stop_machine": [("machine_stop", 0.0, "poke")],      # from the hover if armed (fast), else from rest
     "disarm_stop": [("machine_stop", 0.0, "rest")],
 }
+RACK_CONTROLS = {   # order matters: a latch pops its caddy out, then the caddy push is taught from there
+    "power_button": (0.004, pressed("power_button")),
+    "drive0_latch": (0.004, lambda b, a: a["state"]["caddy_out_mm"][0] > 20),
+    "drive0_caddy": (0.033, lambda b, a: b["state"]["caddy_out_mm"][0] > 20 and a["state"]["caddy_out_mm"][0] < 3),
+    "drive1_latch": (0.004, lambda b, a: a["state"]["caddy_out_mm"][1] > 20),
+    "drive1_caddy": (0.033, lambda b, a: b["state"]["caddy_out_mm"][1] > 20 and a["state"]["caddy_out_mm"][1] < 3),
+}
 CELL_CONTROLS = {"machine_start": LAB_CONTROLS["machine_start"][:2],   # any hand: no STOP watch in the cell, and the
                  "machine_stop": LAB_CONTROLS["machine_stop"]}           # right hand is twice as fast to START
 CELL_TASKS = {k: LAB_TASKS[k] for k in ("start_cycle", "stop_machine", "arm_stop", "disarm_stop")}
-SCENES = {"devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json"),
+RACK_TASKS = {      # the runbook: Er01 -> hard_reset; Er42 -> reseat the drive whose LED is red
+    "hard_reset": [("power_button", 4.6, "press"), ("power_button", 1.0, "release"), ("power_button", 5.0, "tap")],
+    "reseat_drive0": [("drive0_latch", 1.0, "tap"), ("drive0_caddy", 3.0, "tap")],
+    "reseat_drive1": [("drive1_latch", 1.0, "tap"), ("drive1_caddy", 3.0, "tap")],
+}
+SCENES = {"rack": (RACK_CONTROLS, RACK_TASKS, HERE / "taught_rack.json"), "devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json"),
           "cell": (CELL_CONTROLS, CELL_TASKS, HERE / "taught_cell.json")}
-ALL_TASKS = {**TASKS, **LAB_TASKS}
+ALL_TASKS = {**TASKS, **LAB_TASKS, **RACK_TASKS}
 
 
 def run(arm, task, taught):
@@ -278,6 +290,9 @@ CHECKS = {   # task -> did it work, from the sim's device state and the events s
     "enter_bootloader": lambda d, ev: d["state"]["board"] == "boot",
     "start_cycle": lambda d, ev: d["state"]["machine"] == "running",
     "stop_machine": lambda d, ev: d["state"]["machine"] == "stopped",
+    "hard_reset": lambda d, ev: "hard power off (held 4 s)" in ev and any(e.startswith("boot complete") for e in ev),
+    "reseat_drive0": lambda d, ev: d["state"]["drives"][0] == "ok" and "drive0 seated: rebuilding" in ev,
+    "reseat_drive1": lambda d, ev: d["state"]["drives"][1] == "ok" and "drive1 seated: rebuilding" in ev,
     "arm_stop": lambda d, ev: True,          # motion-only: a failure raises
     "disarm_stop": lambda d, ev: True,
 }

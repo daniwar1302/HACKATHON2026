@@ -26,6 +26,7 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 ./waldo-sim/demo.sh cell   # machine tending + QC
 ./waldo-sim/demo.sh lab    # hardware-in-the-loop firmware update + guarded machine cycle
 ./waldo-sim/demo.sh it     # IT ticket: "the office internet is down"
+./waldo-sim/demo.sh rack   # SRE page: datacenter remote hands
 ```
 
 * **Machine tending + QC (cell):** load a raw part from the infeed fixture into the machine, press START, watch the
@@ -39,6 +40,9 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 * **IT ticket (devices desk):** "the office internet has been down since this morning." Claude found the router and
   its power strip with `look`, read power green / internet amber, power-cycled the router, waited and confirmed both
   LEDs green, touching nothing else on the desk (13 turns, 89 s, $0.28; ground truth: internet up).
+* **SRE page (datacenter remote hands):** "storage on db-07 degraded". Claude read the server's panel (Er42), found
+  the drive bay with the red LED, reseated just that drive per the runbook, and declined to hard-reset a host that
+  was only degraded; verified all LEDs green (13 turns, 41 s, $0.26; ground truth: healthy).
 * **The agent found two design flaws we had built in:** START and STOP taught on the same hand (it refused to run
   the cycle unguarded and asked for START on the other hand), and a blocking guard that couldn't cover a start (it
   reported its own failed run and proposed a background guard). Both fixed; the third run passed.
@@ -51,6 +55,7 @@ below, unscripted, with Claude's reasoning and tool calls captioned at the momen
 | Firmware update (hung-board recovery, BOOT+RESET, flash, read code) | **6/6** |
 | Machine tending with overpressure guard | **6/6**, every fault stopped at ~8 bar, gauge error ~0.1 bar |
 | IT desk: power-cycle router, 2FA key, start button, light switch (taught) | **20/20** |
+| Datacenter runbook: hard reset (hold 4 s), reseat drive 0 / 1 (taught) | **12/12** |
 | Lab buttons incl. two-hand BOOT+RESET (taught) | **18/18** |
 | Teach a button by pointing (3 px noise, desk-only twin) | **12/12**, ~1.3 s each |
 | Teach a pick/place by one demonstration, replay on new seeds | **5/5 + 5/5** |
