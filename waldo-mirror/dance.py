@@ -6,7 +6,8 @@
 Bus events it listens to:
     dance_tempo   {bpm, beat_t, confidence, loudness}   from the call bridge's beat tracker
     dance_phrase  {moves: [...], energy: 0..1}          the voice agent's choreography
-    dance_start   only published after the operator said yes on the call
+    dance_start   only published once the operator asked for a dance (texted "dance") and music plays
+    choreo_sync   {path, video_t, wall_t}: play the Just Dance routine from choreo.py, in time with the music
     dance_stop / stop_requested / call_ended            stop: glide back, hand the arms back
 
 It publishes dance_started / dance_move / dance_stopped / dance_error. The dance ends by itself
@@ -31,7 +32,7 @@ import numpy as np
 from moves import BEATS_PER_MOVE, CALM, HYPE, MOVES, fit_energy, pose, ready_pose
 
 BUS = "http://127.0.0.1:8770"
-EVENTS = {"dance_tempo", "dance_phrase", "dance_start", "dance_stop", "stop_requested", "call_ended"}
+EVENTS = {"dance_tempo", "dance_phrase", "dance_start", "dance_stop", "stop_requested", "call_ended", "choreo_sync"}
 MIN_CONFIDENCE = 0.2
 MUSIC_GONE_S = 6.0
 
@@ -73,6 +74,7 @@ class Choreo:
         self.reset()
 
     def reset(self) -> None:
+        self.routine = None  # (times, joint angles, video_t, wall_t) while playing a Just Dance routine
         self.start_beat = None
         self.slot = -1
         self.move = None
@@ -118,8 +120,19 @@ class Choreo:
         options = [m for m in pool if m not in self.last_moves] or list(pool)
         return self.rng.choice(options)
 
+    def play(self, times: np.ndarray, qs: np.ndarray, video_t: float, wall_t: float) -> None:
+        """Switch to a recorded routine; video_t (s into it) was playing at wall time wall_t."""
+        self.routine = (times, qs, video_t, wall_t)
+
     def target(self, now: float):
         """(move or None, 14 joint angles, waist yaw) for this instant."""
+        if self.routine is not None:
+            times, qs, video_t, wall_t = self.routine
+            vt = video_t + (now + self.offset - wall_t)
+            if vt <= times[-1]:
+                q = np.array([np.interp(vt, times, qs[:, j]) for j in range(qs.shape[1])])
+                return "choreography", q, 0.0
+            self.routine, self.slot = None, -1  # routine over: back to freestyle
         if self.bpm is None:
             return None, ready_pose(), 0.0
         b = self.beats(now)
@@ -198,6 +211,10 @@ def main() -> None:
                     dancing = True
                     publish({"type": "dance_started"})
                     print("dancing", flush=True)
+                elif t == "choreo_sync" and dancing:
+                    data = np.load(e["path"])
+                    choreo.play(data["t"], data["q"], float(e["video_t"]), float(e["wall_t"]))
+                    print(f"choreography: {data['title']} from {float(e['video_t']):.1f}s", flush=True)
                 elif t in ("dance_stop", "stop_requested", "call_ended") and dancing:
                     finish(t)
             if dancing:

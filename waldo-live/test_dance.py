@@ -194,6 +194,56 @@ async def test_phrase_requests_every_32_beats():
     assert len(s.said) == n + 1
 
 
+async def test_asks_to_text_the_song_then_requests_the_routine_and_syncs(tmp_path, monkeypatch):
+    import dance_call
+    from beats import Beat
+
+    monkeypatch.setattr(dance_call, "CALL_AUDIO", str(tmp_path / "call.raw"))
+    clock = {"t": 50.0}
+    d, s, published = make(clock=lambda: clock["t"])
+    d.state = "dancing"
+    d.tracker = SteadyTracker(Beat(120.0, 49.5, 0.6, 0.3))
+    d.on_audio(b"\x01\x00" * 24000 * 9)  # 9 s of music
+    await d.tick()
+    assert d.song_asked and any("text me the song" in (x or "") for x in s.said)
+    await d.on_text("Levitating Dua Lipa")
+    assert published[-1] == {"type": "choreo_request", "query": "Levitating Dua Lipa"}
+    await d.on_bus({"type": "choreo_ready", "query": "Levitating Dua Lipa", "path": "/x/abc.npz", "title": "JD Levitating"})
+    align = published[-1]
+    assert align["type"] == "choreo_align" and align["path"] == "/x/abc.npz" and align["rate"] == 24000
+    assert (tmp_path / "call.raw").stat().st_size == 24000 * 2 * 9
+    await d.on_bus({"type": "choreo_sync", "path": "/x/abc.npz", "video_t": 30.0, "wall_t": 50.0})
+    assert d.synced and "Just Dance" in s.said[-1]
+    said = len(s.said)
+    clock["t"] += 31
+    before = len(published)
+    await d.tick()  # re-sync every 30 s, and no more freestyle phrase requests
+    assert any(e["type"] == "choreo_align" for e in published[before:]) and len(s.said) == said
+
+
+async def test_identifies_the_song_itself_when_it_can():
+    from beats import Beat
+
+    async def identify(wav: bytes):
+        assert wav[:4] == b"RIFF"
+        return "Levitating Dua Lipa"
+
+    published = []
+
+    async def publish(e):
+        published.append(e)
+
+    s = FakeSession()
+    d = DanceCall(s, publish, clock=lambda: 0.0, identify=identify)
+    d.state = "dancing"
+    d.tracker = SteadyTracker(Beat(120.0, 0.0, 0.6, 0.3))
+    d.on_audio(b"\x01\x00" * 24000 * 9)
+    await d.tick()
+    import asyncio
+    await asyncio.sleep(0.01)
+    assert {"type": "choreo_request", "query": "Levitating Dua Lipa"} in published
+
+
 async def test_engine_stopping_ends_the_dance():
     d, s, published = make()
     d.state = "dancing"

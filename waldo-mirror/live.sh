@@ -60,11 +60,15 @@ EOF
     pgrep -f "/waldo-mirror/.venv/bin/python dance.py" >/dev/null && { echo "dance engine already armed"; exit 1; }
     flag=""; [ "$1" = dance-dry ] && flag="--dry-run"
     tmux new-window -d -t waldo -n dance "$DIR/dance.sh $flag 2>/tmp/dance_stderr.log | tee /tmp/dance_live.log; echo; read -p '[dance engine exited - Enter closes this window] ' x"
-    sleep 3; tail -2 /tmp/dance_live.log
+    # The Just Dance worker only downloads and converts routines; it never moves the robot.
+    pgrep -f "/waldo-mirror/.venv/bin/python choreo.py worker" >/dev/null || \
+      tmux new-window -d -t waldo -n choreo "$DIR/choreo.sh worker 2>/tmp/choreo_stderr.log | tee /tmp/choreo_live.log; echo; read -p '[choreo worker exited - Enter closes this window] ' x"
+    sleep 3; tail -2 /tmp/dance_live.log; tail -1 /tmp/choreo_live.log
     ;;
   dance-off)
     pkill -INT -f "/waldo-mirror/.venv/bin/python dance.py" && echo "dance engine disarmed (arms released if it was dancing)" || echo "dance engine was not armed"
-    sleep 3; tmux send-keys -t waldo:dance Enter 2>/dev/null; true
+    pkill -INT -f "/waldo-mirror/.venv/bin/python choreo.py worker" && echo "choreo worker stopped"
+    sleep 3; tmux send-keys -t waldo:dance Enter 2>/dev/null; tmux send-keys -t waldo:choreo Enter 2>/dev/null; true
     ;;
   *)
     echo "usage: live.sh check|start|stop|dance|dance-dry|dance-off"; exit 2 ;;

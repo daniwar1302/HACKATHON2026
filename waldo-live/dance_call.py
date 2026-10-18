@@ -12,13 +12,20 @@ Flow on the call:
   done       -> music stopped, "stop" was heard, or the engine stopped; Waldo talks again
 
 "stop" (or "enough", "wait", "pause") from the operator stops the dance at any point.
+
+Just Dance: while freestyling, Waldo finds out the song (AudD if AUDD_API_TOKEN is set, otherwise
+it asks the operator to text the title), asks choreo.py on Waldo for the routine, then sends the
+last 15 s of call audio so the routine can be synced to the music; it re-syncs every 30 s.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
+import io
 import os
 import re
 import time
+import wave
 
 from beats import BeatTracker
 
@@ -28,6 +35,11 @@ GO = re.compile(r"^\W*(?:ok(?:ay)?\W+)?go\W*$|(?<!let's )(?<!lets )\bgo\b[\s,!.]
 STOP = re.compile(r"\b(stop|enough|wait|pause|that'?s it)\b", re.I)
 STEADY_ESTIMATES = 3          # confident tempo readings in a row before asking to dance
 MIN_CONFIDENCE = 0.2
+RATE = 24000
+KEEP_AUDIO_S = 15.0
+IDENTIFY_AFTER_S = 8.0
+RESYNC_S = 30.0
+CALL_AUDIO = "/tmp/waldo_call_audio.raw"
 COUNTDOWN_S = 4.0  # spoken "3, 2, 1" before the arms move: a warning for anyone near the robot
 MOVE_NAMES = ["pump", "sway", "wave", "raise_roof", "disco", "circles", "hands_up"]
 
@@ -70,8 +82,17 @@ def turn_detection(auto: bool) -> dict:
 class DanceCall:
     """Per-call dance state. `bridge` provides publish(event) and the session provides speech."""
 
-    def __init__(self, session, publish, clock=time.time):
+    def __init__(self, session, publish, clock=time.time, identify=None):
         self.s, self.publish, self.clock = session, publish, clock
+        self.identify = identify          # async (wav bytes) -> "title artist" or None; None: ask the operator
+        self.audio = bytearray()          # last KEEP_AUDIO_S of call audio, 16-bit mono at RATE
+        self.audio_end_t = 0.0
+        self.music_s = 0.0
+        self.song = None                  # what we asked choreo.py for
+        self.song_asked = False
+        self.routine = None               # choreo_ready event
+        self.synced = False
+        self.next_sync_at = None
         self.state = "greeting"
         self.tracker = BeatTracker(24000, clock=clock)
         self.steady = 0
@@ -93,11 +114,57 @@ class DanceCall:
     def on_audio(self, pcm24k: bytes) -> None:
         if self.state in ("listening", "confirming", "countdown", "dancing"):
             self.tracker.feed(pcm24k)
+            self.audio.extend(pcm24k)
+            del self.audio[: max(0, len(self.audio) - int(KEEP_AUDIO_S * RATE) * 2)]
+            self.audio_end_t = self.clock()
+            self.music_s += len(pcm24k) / 2 / RATE
+
+    def wav(self, seconds: float) -> bytes:
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1), w.setsampwidth(2), w.setframerate(RATE)
+            w.writeframes(bytes(self.audio[-int(seconds * RATE) * 2:]))
+        return buf.getvalue()
+
+    async def request_routine(self, query: str) -> None:
+        self.song = query
+        await self.publish({"type": "choreo_request", "query": query})
+
+    async def _identify(self) -> None:
+        name = None
+        try:
+            name = await self.identify(self.wav(IDENTIFY_AFTER_S))
+        except Exception:
+            pass
+        if name:
+            await self.request_routine(name)
+            await self._say(f"Say in at most 10 excited words: you recognize {name} and you're learning its Just Dance routine.")
+        else:
+            await self._ask_for_song()
+
+    async def _ask_for_song(self) -> None:
+        self.song_asked = True
+        await self._say("Say in at most 12 words: text me the song name and I'll learn its Just Dance routine!")
+
+    async def _sync(self) -> None:
+        with open(CALL_AUDIO, "wb") as f:
+            f.write(bytes(self.audio))
+        await self.publish({"type": "choreo_align", "path": self.routine["path"], "audio": CALL_AUDIO,
+                            "rate": RATE, "end_wall_t": self.audio_end_t})
+        self.next_sync_at = self.clock() + RESYNC_S
 
     async def tick(self) -> None:
         """About once a second while the call is up."""
         if self.state == "countdown" and self.clock() >= self.go_at:
             await self.go(announce=False)
+        if self.state == "dancing" and self.song is None and not self.song_asked and self.music_s >= IDENTIFY_AFTER_S:
+            self.song_asked = True
+            if self.identify:
+                asyncio.create_task(self._identify())
+            else:
+                await self._ask_for_song()
+        if self.state == "dancing" and self.routine and self.next_sync_at and self.clock() >= self.next_sync_at:
+            await self._sync()
         if self.state not in ("listening", "confirming", "countdown", "dancing"):
             return
         beat = self.tracker.estimate()
@@ -118,7 +185,7 @@ class DanceCall:
                 self.state, self.go_at = "countdown", self.clock() + COUNTDOWN_S
                 await self._say(f"Say, excited and short: you hear the beat, about {round(self.bpm)} BPM, "
                                 "and you're dancing in 3, 2, 1! Nothing else.")
-        elif self.state == "dancing" and self.clock() >= self.next_phrase_at and self.bpm:
+        elif self.state == "dancing" and not self.synced and self.clock() >= self.next_phrase_at and self.bpm:
             self.phrases += 1
             talk = "You may add at most 4 excited words." if self.phrases % 3 == 0 else "Do not speak."
             await self._say(f"Choose the next 32 beats for the music you hear now: call the dance tool. {talk}")
@@ -139,9 +206,20 @@ class DanceCall:
             await self.go()
         elif t in ("stop", "stop!") and self.state in ("listening", "confirming", "countdown", "dancing"):
             await self.stop("operator texted stop")
+        elif self.song_asked and self.song is None and self.state in ("countdown", "starting", "dancing") and len(t) > 1:
+            await self.request_routine(text.strip()[:80])
+            await self._say(f"Say in at most 8 words: got it, learning {text.strip()[:40]}!")
 
     async def on_bus(self, event: dict) -> None:
         t = event.get("type")
+        if t == "choreo_ready" and event.get("query") == self.song:
+            self.routine = event
+            await self._sync()
+        elif t == "choreo_failed" and event.get("query") == self.song:
+            await self._say("Say in at most 12 words: you couldn't find that routine, so you'll keep freestyling.")
+        elif t == "choreo_sync" and not self.synced:
+            self.synced = True
+            await self._say("Say in at most 8 words: switching to the real Just Dance choreography!")
         if t == "dance_started":
             self.state = "dancing"
             self.next_phrase_at = 0.0

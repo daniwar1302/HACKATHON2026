@@ -50,8 +50,21 @@ WS_PATH = "/ws/call"
 REALTIME_URL = "wss://api.openai.com/v1/realtime"
 SPEAK_GAP_S = 3.0  # at most one spoken camera alert per this many seconds
 FORWARDED = {"check_failed", "check_cleared", "stop_requested", "robot_stopped", "brain_progress", "call_requested",
-             "dance_started", "dance_stopped", "dance_error"}
-DANCE_EVENTS = {"dance_started", "dance_stopped", "dance_error"}
+             "dance_started", "dance_stopped", "dance_error", "choreo_ready", "choreo_failed", "choreo_sync"}
+DANCE_EVENTS = {"dance_started", "dance_stopped", "dance_error", "choreo_ready", "choreo_failed", "choreo_sync"}
+
+
+def audd_identify(http: aiohttp.ClientSession, token: str):
+    """Song recognition with AudD (audd.io): wav bytes -> "title artist", or None."""
+    async def identify(wav: bytes) -> str | None:
+        form = aiohttp.FormData()
+        form.add_field("api_token", token)
+        form.add_field("file", wav, filename="clip.wav", content_type="audio/wav")
+        async with http.post("https://api.audd.io/", data=form, timeout=20) as resp:
+            data = await resp.json(content_type=None)
+        result = data.get("result") if data.get("status") == "success" else None
+        return f"{result['title']} {result['artist']}" if result else None
+    return identify
 DANCE_ME = re.compile(r"\bdance\b", re.I)
 
 INSTRUCTIONS = """You are Waldo, a robot in a robotics lab, on a phone call with your operator.
@@ -346,7 +359,9 @@ class Bridge:
             instructions, tools = COMMAND_INSTRUCTIONS, command_tools(self.commands.menu())
         elif mode == "dance":
             instructions, tools = DANCE_INSTRUCTIONS, DANCE_TOOLS
-            s.dance = DanceCall(s, lambda event: apublish(self.http, event))
+            token = os.environ.get("AUDD_API_TOKEN")
+            s.dance = DanceCall(s, lambda event: apublish(self.http, event),
+                                identify=audd_identify(self.http, token) if token else None)
         else:
             instructions, tools = INSTRUCTIONS, TOOLS
         await s.send_openai({
