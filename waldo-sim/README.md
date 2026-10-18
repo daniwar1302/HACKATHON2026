@@ -1,40 +1,52 @@
 # waldo-sim
 
-A MuJoCo G1 that **speaks the real robot's protocols**, so `waldo-arms`, agents, `point_to_xyz`, routines and VLMs run
-against it **unchanged**. Use it to rehearse tasks and to optimize them on measured success rates before the robot.
+The desk-sorting G1 in MuJoCo, **speaking the real robot's protocols**, so `waldo-arms`, agents, `point_to_xyz`,
+routines and VLMs run against it unchanged. Use it to make picking and sorting accurate before the robot.
+
+**Model:** Unitree's official `g1_29dof_mode_15_with_dex1_1.urdf` (the model Michael's arm IK uses) with the real
+Dex1-1 grippers: Unitree's finger meshes, 24.5 mm travel per finger (6–95 mm gap), 20 N per finger. Pelvis fixed
+like the gantry; arms track commands through stiff position actuators with gravity compensation; grasps hold or slip
+by contact and friction. Head camera at the URDF's D435 mount with the real focal length.
+
+**Scene:** a 74 cm desk; containers from Google Scanned Objects (pen cup, wooden tray, desk caddy); items: two
+markers, pen, pencil, eraser, sticky-note pad, sticker sheet (real sizes and masses) plus scanned tape, scissors and
+crayons. Sorting: writing → pen cup, supplies → tray, tools → caddy. Items randomized per seed.
 
 | Real service | Sim stand-in (own ports, no clash with robot tunnels) |
 |---|---|
-| arm_server (ZMQ :5810) | `:15810`: state, enable, release, freeze, ik, check, move_ee, park, set_table, open, grasp, + `sim_reset {seed}`, `sim_objects` |
-| teleimager config / depth | `:16000` / `:15556`: head camera at the URDF d435 mount, metric depth (raw z16) |
+| arm_server (ZMQ :5810) | `:15810`: state, fk, enable, release, freeze, ik, check, move_ee (+ `R`, `contact`), park, set_table, open, grasp, gripper, + `sim_reset {seed, n_items}`, `sim_objects`, `sim_point {item, noise_px}` |
+| teleimager config / depth | `:16000` / `:15556`: head intrinsics, metric depth (raw z16) |
 | camera viewer (HTTP :8766) | `:18766`: `/frame/head_camera.jpg`, `/frame/waldo_webcam.jpg` |
 
-Model: MuJoCo Menagerie `unitree_g1`, pelvis fixed like the gantry, arms kinematic (commanded angles exactly),
-table + three cubes with physics, cubes randomized per seed. IK = damped least squares on the jaw centre; path check =
-contacts of each arm with the body, the other arm and the table along the joint path. **Grasping is simplified**: a
-closed gripper within 5 cm of a cube carries it. Poses, reach limits and collisions are real; grip physics isn't.
+## Files
+
+| File | |
+|---|---|
+| `scene.py` | builds the model: URDF + actuators + Dex1 pads + head camera + desk + containers + items |
+| `sim_server.py` | the protocol server: IK (jaw centre, level jaws or a given `R`), path collision sweep, grasping, scoring |
+| `planner.py` | pick-and-place over the **arm_server protocol** (works on the real robot too): straight-line hand paths, lift-clear route, level-jaw tilted approach, wrist turned gradually, contact stage for the final descent |
+| `bench_sort.py` | N seeded desks, every item picked and dropped in its container, scored on where it lands |
+| `fetch_assets.sh` | pulls the URDF/meshes from Waldo and the scanned objects (assets aren't in git) |
 
 ## Run
 
 ```sh
-MUJOCO_GL=glfw uv run --with mujoco --with robot_descriptions --with pyzmq --with pillow --with numpy waldo-sim/sim_server.py --speed 0
-#   --speed 1 = real time (for watching), 0 = as fast as possible (for benchmarks)
-uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow waldo-sim/bench_pick.py --trials 20
+./waldo-sim/fetch_assets.sh
+MUJOCO_GL=glfw uv run --with mujoco --with pyzmq --with pillow --with numpy waldo-sim/sim_server.py --speed 0   # 1 = real time
+uv run --with pyzmq --with numpy waldo-sim/bench_sort.py --trials 10 --items 3 --truth   # or --noise-px 4 for the vision path
 ```
-Point any MCP client at the sim:
-```sh
-claude mcp add waldo-arms-sim -e G1_ARM_ADDR=tcp://localhost:15810 -e G1_CAM_BASE=http://localhost:18766 -e G1_CAM_HOST=localhost \
-  -e G1_DEPTH_PORT=15556 -e G1_CAMCFG_PORT=16000 -- uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow ~/HACKATHON2026/waldo-arms/server.py
-```
-Rendering needs a GL context: `glfw` works in a desktop session. Headless boxes need EGL or OSMesa.
+Any MCP client can drive it through `waldo-arms` with `G1_ARM_ADDR=tcp://localhost:15810 G1_CAM_BASE=http://localhost:18766
+G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs a GL context (`glfw` in a desktop session).
 
-## What it has measured so far (2026-10-17, laptop, 20 trials in 4.8 s)
+## What it has taught us (2026-10-17)
 
-* **Vision chain is consistent**: `point_to_xyz` on a cube lands within ~1-2 mm in x/y of the true position, at the
-  cube's top surface. This is the reference the real robot's calibration check (the `look` overlay) is held to.
-* **Reach**: at table height (z ≈ −0.10 m in the pelvis frame) the hands only reach to x ≈ 0.35 m. **Put the real table
-  close: its near edge ~20 cm and objects 25–35 cm in front of the pelvis.**
-* **Pick baseline: 12/20 (60%)**. Failures: objects half out of the head camera's view (the point lands on the table:
-  4), the arm path hitting the torso near the midline (3), not visible (1). Those are the next things to optimize.
-
-`bench_pick.py` uses a colour threshold as the target finder; swap in `waldo-arms/vlm_point.ground` to benchmark the VLM.
+* **Where to put things on the real desk:** at 74 cm desk height the head camera can't see closer than ~26 cm in front
+  of the pelvis and the hands can't reach the desk beyond ~38 cm. **Objects 26–38 cm out**, keep **~7 cm clear around
+  containers**; containers can sit further back (the hand only needs to reach above them).
+* **Grasp geometry:** jaw centre is 15.2 cm ahead of the wrist. Straight-down grasps only reach 32 cm out; **tilt ~60°**.
+  The approach must come in **perpendicular to the jaw direction** or the jaws tilt and one finger hits the desk first.
+  Thin sheets need the **fingertips** aimed at them. Hands start below the desk top, so **lift clear before reaching**.
+* **Motion:** joint-space jumps swing the elbow through the torso/desk; straight-line hand paths in ~3 cm steps don't.
+* **Tape roll is 109 mm wide**, more than the Dex1's 95 mm opening: needs a rim pinch (not implemented yet).
+* **Current sort rate: 8/30 (27%)** with ground-truth positions. Main remaining failures: wrist-turn collisions with the
+  torso (elbow in), grasps that miss thin items, the tape.
