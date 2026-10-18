@@ -16,6 +16,23 @@ Waldo is a lab workstation driving robot hardware: WidowX AI arms (Trossen) and 
 lets a Claude agent run physical tasks like "lift the red cup", notice within about a second when something goes
 wrong, stop, phone the operator, talk it through live while the cameras keep watching, and remember the answer.
 
+## Simulation videos
+
+Watch the G1 simulation examples as MP4s, with room and head-camera views plus captions from the agent’s reasoning and tool calls.
+
+**[Watch all six examples — 2:02 highlights reel](media/g1-demos/all_highlights.mp4)**
+
+| Simulation example | Highlights (MP4) | Full run, 3x speed (MP4) |
+|---|---|---|
+| Machine tending + quality control | [Watch 0:23](media/g1-demos/cell_highlights.mp4) | [Watch 1:36](media/g1-demos/cell_full.mp4) |
+| Firmware recovery + pressure interlock | [Watch 0:21](media/g1-demos/lab_highlights.mp4) | [Watch 0:46](media/g1-demos/lab_full.mp4) |
+| Router troubleshooting | [Watch 0:08](media/g1-demos/it_highlights.mp4) | [Watch 0:22](media/g1-demos/it_full.mp4) |
+| Datacenter drive recovery | [Watch 0:08](media/g1-demos/rack_highlights.mp4) | [Watch 0:22](media/g1-demos/rack_full.mp4) |
+| Tablet checkout testing | [Watch 0:23](media/g1-demos/qa_highlights.mp4) | [Watch 0:47](media/g1-demos/qa_full.mp4) |
+| Warehouse returns sorting | [Watch 0:31](media/g1-demos/returns_highlights.mp4) | [Watch 1:09](media/g1-demos/returns_full.mp4) |
+
+[Browse all recordings and uncut camera footage](media/g1-demos/README.md) · [Run the simulations yourself](docs/g1-agent-stack.md#demos-one-command-each-in-the-sim)
+
 ## The flow
 
 Waldo runs three connected loops on the lab PC: act, watch, and ask for help.
