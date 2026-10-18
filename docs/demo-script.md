@@ -1,6 +1,6 @@
 # Waldo — Build Something Agents Want
 
-### Scene 1 — The Unexpected Call
+### Scene 1 — The Unexpected Call (0:00–0:15)
 
 **[A phone rings. Caller ID: Waldo 🤖]**
 
@@ -14,9 +14,9 @@
 
 **[Human opens Spotify and plays Y.M.C.A.]**
 
-### Scene 2 — Waldo Figures It Out
+### Scene 2 — Waldo Figures It Out (0:15–0:30)
 
-**[Music begins. Waldo's actual agent activity appears on screen.]**
+**[Music begins. Show Waldo's actual agent activity on screen.]**
 
 Listening...
 
@@ -26,15 +26,19 @@ Searching physical skills...
 
 Choreography found.
 
-Synchronizing...
+Synchronizing to the beat...
 
 **Waldo:** "Oh, I know this one."
 
-### Scene 3 — The Payoff
+### Scene 3 — The Payoff (0:30–0:55)
 
-**[Waldo dances. Let the music play. Show the actual humanoid robot performing its prepared choreography.]**
+**[Waldo starts dancing. Let the music take center stage.]**
 
-### Scene 4 — The Reveal
+**[Show footage of the real Unitree G1 performing its choreography, with occasional overlays of the corresponding robot commands.]**
+
+**[Cut to the human reacting.]**
+
+### Scene 4 — The Reveal (0:55–1:45)
 
 **[Music fades. Voiceover begins.]**
 
@@ -42,17 +46,19 @@ Synchronizing...
 
 They want to get things done.
 
-Today, AI agents can write code, search the internet, and operate software.
+AI agents can reason, plan, and make decisions, yet they're largely trapped behind screens.
 
-But ask them to do something in the physical world, and suddenly they need help.
+What if they could use the physical world as easily as they use software?
 
-So in one hackathon, we connected an AI agent to an existing humanoid robot.
+In one hackathon, we connected an AI agent to Waldo, a humanoid that calls you through Inkbox using OpenAI Realtime, recognizes music, and retrieves beat-synchronized choreography from Supabase.
 
-Waldo can recognize music, discover a matching choreography, and use the robot to bring it to life.
+For unfamiliar songs, he uses Google MediaPipe to translate Just Dance videos into robot-executable movements, or improvises when no choreography exists.
 
-No new robot. No new foundation model. Just a new way for an agent to act."
+We also built a custom MCP integration to give the agent finer control over Waldo's joints, hands, and grippers, enabling smoother, more precise movements.
 
-### Scene 5 — The Vision
+**The breakthrough isn't teaching robots to dance; it's giving agents access to physical capabilities so they can get things done in the real world.**"
+
+### Scene 5 — The Vision (1:45–2:00)
 
 **[Cut to Waldo facing the camera.]**
 
@@ -60,12 +66,12 @@ No new robot. No new foundation model. Just a new way for an agent to act."
 
 Tomorrow, a fire alarm goes off. Waldo hears it, locates the fire, and deploys a robot equipped to extinguish it.
 
-The agent understands what needs to happen. The robot makes it happen."
+**The agent understands what needs to happen. The robot makes it happen.**"
 
-### Scene 6 — Closing
+### Scene 6 — The Closing (2:00–2:05)
 
-**[Cut to black.]**
+**[Cut to black. Final text appears.]**
 
-# WE GAVE AN AGENT THE ABILITY TO GET THINGS DONE.
+# WE GAVE AN AGENT THE ABILITY TO GET THINGS DONE IN THE REAL WORLD.
 
 *Built in one hackathon.*
