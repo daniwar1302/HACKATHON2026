@@ -82,8 +82,44 @@ async def test_listening_turns_off_auto_responses_and_asks_once_the_beat_is_stea
     d.tracker = SteadyTracker(Beat(124.0, 10.0, 0.6, 0.3))
     for _ in range(3):
         await d.tick()
-    assert d.state == "confirming" and "go Waldo" in s.said[-1]
+    assert d.state == "countdown" and "3, 2, 1" in s.said[-1]
     assert published[-1]["type"] == "dance_tempo" and published[-1]["bpm"] == 124.0
+
+
+async def test_countdown_starts_the_dance_by_itself_unless_stopped():
+    from beats import Beat
+
+    clock = {"t": 0.0}
+    d, s, published = make(clock=lambda: clock["t"])
+    await d.run_tool("listen_for_music", {})
+    d.tracker = SteadyTracker(Beat(124.0, 0.0, 0.6, 0.3))
+    for _ in range(3):
+        await d.tick()
+    clock["t"] += 2.0
+    await d.tick()
+    assert d.state == "countdown"
+    clock["t"] += 2.5
+    await d.tick()
+    assert d.state == "starting" and any(e["type"] == "dance_start" for e in published)
+
+    d2, s2, published2 = make(clock=lambda: clock["t"])
+    d2.state, d2.go_at = "countdown", clock["t"] + 4
+    await d2.on_transcript("remote", "wait, stop!")
+    clock["t"] += 5
+    await d2.tick()
+    assert d2.state == "done" and not any(e["type"] == "dance_start" for e in published2)
+
+
+async def test_confirm_mode_still_waits_for_go_waldo(monkeypatch):
+    from beats import Beat
+
+    monkeypatch.setenv("WALDO_DANCE_CONFIRM", "1")
+    d, s, published = make()
+    await d.run_tool("listen_for_music", {})
+    d.tracker = SteadyTracker(Beat(124.0, 10.0, 0.6, 0.3))
+    for _ in range(3):
+        await d.tick()
+    assert d.state == "confirming" and "go Waldo" in s.said[-1]
 
 
 async def test_lyrics_saying_yes_do_not_start_the_dance_but_go_waldo_does():

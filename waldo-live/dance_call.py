@@ -4,8 +4,9 @@ Flow on the call:
   greeting   -> Waldo asks the operator to play a song
   listening  -> the voice agent stops answering every sound (music would set it off) and the
                 beat tracker listens; once the beat is steady Waldo asks to dance
-  confirming -> the dance starts only on the phrase "go Waldo" (said) or "go" (texted): lyrics
-                are full of "yeah"s, so a plain yes doesn't count here
+  countdown  -> texting "dance" was the go-ahead: Waldo says "dancing in 3, 2, 1" and starts
+                (with WALDO_DANCE_CONFIRM=1 it instead waits for "go Waldo" said or "go" texted;
+                lyrics are full of "yeah"s, so a plain yes never counts)
   dancing    -> every 32 beats the voice agent, which hears the music, picks the next phrase of
                 moves and an energy (the dance tool); the engine on Waldo moves the arms on the beat
   done       -> music stopped, "stop" was heard, or the engine stopped; Waldo talks again
@@ -15,6 +16,7 @@ Flow on the call:
 from __future__ import annotations
 
 import base64
+import os
 import re
 import time
 
@@ -26,6 +28,7 @@ GO = re.compile(r"^\W*(?:ok(?:ay)?\W+)?go\W*$|(?<!let's )(?<!lets )\bgo\b[\s,!.]
 STOP = re.compile(r"\b(stop|enough|wait|pause|that'?s it)\b", re.I)
 STEADY_ESTIMATES = 3          # confident tempo readings in a row before asking to dance
 MIN_CONFIDENCE = 0.2
+COUNTDOWN_S = 4.0  # spoken "3, 2, 1" before the arms move: a warning for anyone near the robot
 MOVE_NAMES = ["pump", "sway", "wave", "raise_roof", "disco", "circles", "hands_up"]
 
 DANCE_INSTRUCTIONS = """You are Waldo, a playful humanoid robot in a robotics lab, on a phone call with your operator.
@@ -75,6 +78,8 @@ class DanceCall:
         self.bpm = None
         self.next_phrase_at = 0.0
         self.phrases = 0
+        self.go_at = None
+        self.confirm = os.environ.get("WALDO_DANCE_CONFIRM") == "1"
 
     async def _auto_responses(self, on: bool) -> None:
         await self.s.send_openai({"type": "session.update", "session": {
@@ -86,12 +91,14 @@ class DanceCall:
     # -- hooks called by the bridge ------------------------------------------
 
     def on_audio(self, pcm24k: bytes) -> None:
-        if self.state in ("listening", "confirming", "dancing"):
+        if self.state in ("listening", "confirming", "countdown", "dancing"):
             self.tracker.feed(pcm24k)
 
     async def tick(self) -> None:
         """About once a second while the call is up."""
-        if self.state not in ("listening", "confirming", "dancing"):
+        if self.state == "countdown" and self.clock() >= self.go_at:
+            await self.go(announce=False)
+        if self.state not in ("listening", "confirming", "countdown", "dancing"):
             return
         beat = self.tracker.estimate()
         if beat is None:
@@ -103,9 +110,14 @@ class DanceCall:
         if steady:
             self.bpm = beat.bpm
         if self.state == "listening" and self.steady >= STEADY_ESTIMATES:
-            self.state = "confirming"
-            await self._say(f"Say, excited and short: you can hear the beat, about {round(self.bpm)} BPM, and to start "
-                            "you need them to say 'go Waldo' (or text 'go'). Nothing else.")
+            if self.confirm:
+                self.state = "confirming"
+                await self._say(f"Say, excited and short: you can hear the beat, about {round(self.bpm)} BPM, and to start "
+                                "you need them to say 'go Waldo' (or text 'go'). Nothing else.")
+            else:
+                self.state, self.go_at = "countdown", self.clock() + COUNTDOWN_S
+                await self._say(f"Say, excited and short: you hear the beat, about {round(self.bpm)} BPM, "
+                                "and you're dancing in 3, 2, 1! Nothing else.")
         elif self.state == "dancing" and self.clock() >= self.next_phrase_at and self.bpm:
             self.phrases += 1
             talk = "You may add at most 4 excited words." if self.phrases % 3 == 0 else "Do not speak."
@@ -115,7 +127,7 @@ class DanceCall:
     async def on_transcript(self, party: str, text: str) -> None:
         if party != "remote":
             return
-        if STOP.search(text) and self.state in ("listening", "confirming", "dancing"):
+        if STOP.search(text) and self.state in ("listening", "confirming", "countdown", "dancing"):
             await self.stop("operator said stop")
         elif self.state == "confirming" and GO.search(text):
             await self.go()
@@ -125,7 +137,7 @@ class DanceCall:
         t = text.strip().lower()
         if self.state == "confirming" and t in ("go", "go waldo", "go!", "dance"):
             await self.go()
-        elif t in ("stop", "stop!") and self.state in ("listening", "confirming", "dancing"):
+        elif t in ("stop", "stop!") and self.state in ("listening", "confirming", "countdown", "dancing"):
             await self.stop("operator texted stop")
 
     async def on_bus(self, event: dict) -> None:
@@ -155,10 +167,11 @@ class DanceCall:
 
     # -- transitions -----------------------------------------------------------
 
-    async def go(self) -> None:
+    async def go(self, announce: bool = True) -> None:
         self.state = "starting"
         await self.publish({"type": "dance_start", "by": "operator", "bpm": self.bpm})
-        await self._say("Say only: 'Let's go!'")
+        if announce:
+            await self._say("Say only: 'Let's go!'")
 
     async def stop(self, reason: str) -> None:
         await self.publish({"type": "dance_stop", "reason": reason})
