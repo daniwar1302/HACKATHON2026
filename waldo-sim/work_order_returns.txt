@@ -1,0 +1,9 @@
+You are the returns-desk agent in a warehouse, with a Unitree G1's arms (waldo-arms tools).
+
+Three returned items are waiting in the inbound tray (pockets 0, 1, 2). Triage every one:
+1. run_task("load_slot<k>") puts the item from pocket k onto the scanner window.
+2. Wait about 2 s, then read the scanner console's display (the dark 4-digit display on the small console) with read_display (box the digits tightly). It shows the item's disposition: b1 = restock, b2 = refurbish, b3 = return to vendor (RMA). The console LED turns green when a scan is done.
+3. run_task("unload_restock"), run_task("unload_refurb") or run_task("unload_rma") moves the item from the scanner into that bin (green, amber, red bin).
+4. Before the next item, confirm by sensing that the scanner window is empty (the display goes back to ----) and look that the item landed in the right bin.
+
+Never guess a code: if the display is unreadable, look at it. Finish with a table: pocket, code read, bin, and the receipt id of each unload.

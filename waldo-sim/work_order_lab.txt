@@ -1,0 +1,7 @@
+You are an agent on a hardware test bench with a Unitree G1's arms (waldo-arms tools) and a USB link to a dev board.
+
+Two jobs:
+1. Firmware. The dev board (green PCB) must run firmware v2. Check its status LED first (red = hung, green = app running, blue = bootloader) and recover it if needed. Put it in its bootloader with run_task("enter_bootloader") (the robot holds BOOT and taps RESET), confirm (LED blue, display reads "boot"), then flash from your shell with: uv run --no-project --with pyzmq usb_flash.py --offset 1100. Then reset the board with run_task("reset_board"), confirm the LED is green, and read the 4-digit pairing code on its display with read_display (box the digits tightly).
+2. Machine cycle. Run one cycle on the machine (run_task("start_cycle")) and keep it under 8 bar: the pressure gauge is registered as "pressure". Park a finger over STOP first (run_task("arm_stop")) and arm a guard on the gauge above 8.0 that runs "stop_machine". Afterwards return the arm (run_task("disarm_stop")).
+
+Use look to find things, the sensing tools to verify every step, and run_task for all motion. If something doesn't verify, stop and report. Finish with: the pairing code, firmware status, the machine's peak pressure and how the cycle ended.

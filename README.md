@@ -75,7 +75,13 @@ need most of it.
 | [`waldo-mirror/`](waldo-mirror/) | The G1's arms: live mirroring from a phone camera, the dance engine (freestyle on the beat + Just Dance routines), choreography worker |
 | [`waldo-ask/`](waldo-ask/) | MCP server for asking the operator by email, iMessage, SMS or phone, with the hint memory |
 | [`waldo-mcp/`](waldo-mcp/) | MCP server for the G1 humanoid over the Unitree SDK: stand, gestures, stop, cameras (no walking) |
+| [`waldo-arms/`](waldo-arms/) | **MCP server for the G1's hands and grippers** through `arm_server` (IK, collision and table checks): `move_hand`, `gripper`, `check_reach`, `look`, … |
+| [`waldo-sim/`](waldo-sim/) | **MuJoCo desk-sorting sim on Unitree's G1 + Dex1-1 model**, speaking the real robot's protocols so `waldo-arms`, agents and VLMs run unchanged; `planner.py` (works on the real arm_server too) and `bench_sort.py` (sort rate on ground truth) |
+| [`waldo-console/`](waldo-console/) | Laptop-side G1 controls: browser console, virtual XR controllers for teleop (legacy manual mode), a second MCP (speech, LED, volume, session queue), arm_server client |
 | [`waldo-call/`](waldo-call/) | One-shot test call through Inkbox's hosted voice agent |
+| [`docs/quickstart.md`](docs/quickstart.md) | **Start here:** access, cameras, robot modes, and how to run every piece |
+| [`docs/vlm-hand-tasks.md`](docs/vlm-hand-tasks.md) | **VLM-driven hand tasks:** onboard models → `point_to_xyz` → `move_hand`; integration recipes, precision, measured numbers |
+| [`docs/g1-arm-commands.md`](docs/g1-arm-commands.md) | Every `arm_server` command, FSM modes, the teleop controller map, stop procedures |
 | [`docs/live-call-framework.md`](docs/live-call-framework.md) | Detailed design: components, event schema, timings, security |
 | [`docs/recording-guide.md`](docs/recording-guide.md) | Shot list for recording labeled clips to tune Jev |
 | [`docs/robot-survey.md`](docs/robot-survey.md) | What's on Waldo: hardware, network, existing control code, safety rules |
@@ -147,3 +153,9 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
 - Arm motion (mirroring, dancing) runs only with the robot balancing, on the gantry, with a spotter on the controller (L1+A).
 - "Person within reach" shots and tests happen only with the arm parked or its motors off.
 - Waldo is shared: check with the bay owner before using the robot.
+
+## G1 agent stack (humanoid arms as agent skills)
+
+Agents running physical work cells on the Unitree G1 through MCP: machine tending + QC, a hardware-in-the-loop
+firmware update, overpressure interlocks, receipts. Claude ran both cells from plain-English work orders and matched
+ground truth. One-command demos and numbers: [docs/g1-agent-stack.md](docs/g1-agent-stack.md).

@@ -1,0 +1,13 @@
+You are the on-call SRE agent. The robot (a Unitree G1's arms, waldo-arms tools) is your remote hands in the server room.
+
+Page: "CRITICAL: storage on db-07 degraded / host unresponsive. Investigate and remediate."
+
+db-07 is the server on the desk in front of the robot. Its front panel has a 4-digit status display, a status LED, a power button, and two drive bays, each with a drive LED (green ok, red failed, amber rebuilding).
+
+Runbook:
+- Display "good" + green status LED: healthy, nothing to do.
+- "Er01" (host hung): hard reset with run_task("hard_reset") (holds power 4 s, then powers on; boot takes a few seconds).
+- "Er42" (drive offline): find the bay whose LED is red and reseat that drive: run_task("reseat_drive0") for the bay nearer the panel, run_task("reseat_drive1") for the outer one. The drive rebuilds for a few seconds after it's seated.
+- Never reseat a healthy drive, and never hard-reset a host that is only degraded.
+
+Use look to find the panel, read_display for the status code (box the digits tightly) and read_light for the LEDs. Verify the fix by sensing before you resolve the page. Report: what the panel showed, which runbook step you took and why, the final display and LED states, and the receipt id of the action.
