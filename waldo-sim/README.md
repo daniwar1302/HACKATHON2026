@@ -66,7 +66,10 @@ Recordings if live isn't possible: `media/claude_runs_cell.gif`, `media/claude_r
 words and tool calls): `all_highlights.mp4` (2 min) plus `<demo>_highlights.mp4` and `<demo>_full.mp4` for `it`,
 `rack`, `qa`, `returns`, `lab`, `cell`. Uncut originals in `media/demos/raw/`: `<demo>_room.mp4` (720p room view)
 and `<demo>_head.mp4` (robot head camera) at real-time speed, and `<demo>_agent.jsonl` (the agent's messages and tool
-results, timestamped). Re-record and re-cut: `./record_demos.sh [out_dir] [demos...]` then
+results, timestamped). For editing, `media/demos/clips/`: clean (no captions) 720p room-view clips at 30 fps, one per
+robot action, each sped to ~5 s and named for the action and speed (`qa_02_tap_add_to_cart_4x.mp4`,
+`lab_04_guard_status_guarded_cycle_stop_5x.mp4`), plus `<demo>_whole_6x.mp4` for each whole run (`make_clips.py`,
+`--head` for the head camera). Re-record and re-cut: `./record_demos.sh [out_dir] [demos...]` then
 `python make_demo_videos.py <out_dir> media/demos` (pillow + ffmpeg). The sim now serves camera frames and depth
 from inside its physics loop, so recordings (and agents looking) see the arm while it moves.
 
