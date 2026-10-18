@@ -37,9 +37,13 @@ class Twin:
         self.fingers = {s: {m.body(f"{s}_dex1_finger_link_{k}").id for k in (1, 2)} for s in SIDES}
         self.containers = {m.body(f"{n}_model").id for n in scene.CONTAINERS}
         self.items = {scene.item_body(m, n) for n in scene.ITEMS}
-        for n in scene.ITEMS:                   # items are ignored by the planner; park them far away in the twin
-            qa = m.jnt_qposadr[m.body_jntadr[scene.item_body(m, n)]]
-            self.d.qpos[qa:qa + 3] = [-2.0, 0.0, -2.0]
+        for n in scene.ITEMS:                   # items are ignored by the planner: no collisions, parked apart
+            b = scene.item_body(m, n)
+            qa = m.jnt_qposadr[m.body_jntadr[b]]
+            self.d.qpos[qa:qa + 3] = [-2.0, 0.3 * list(scene.ITEMS).index(n), -2.0]
+            for g in range(m.ngeom):            # (all parked items overlapping overflowed MuJoCo's contact arena,
+                if m.geom_bodyid[g] == b:       #  which can silently drop real arm contacts)
+                    m.geom_contype[g] = m.geom_conaffinity[g] = 0
         # The real/sim grippers sit open (24.5 mm out per finger); the twin's fingers must match or its "clear"
         # paths put the fingertips into the desk. Open is also the conservative (widest) shape.
         self.finger_q = [m.joint(f"{s}_dex1_finger_joint_{k}").qposadr[0] for s in SIDES for k in (1, 2)]
