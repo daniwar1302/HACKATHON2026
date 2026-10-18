@@ -42,8 +42,8 @@ def test_waits_on_ready_pose_until_the_next_beat_then_follows_the_phrase():
     move, q, _ = c.target(10.2)
     assert move is None and np.allclose(q, ready_pose())  # first move starts on beat 21 (t=10.5)
     assert c.target(10.6)[0] == "wave"
-    assert c.target(10.5 + 4 * 0.5 + 0.1)[0] == "disco"  # next 4-beat slot
-    nxt = c.target(10.5 + 8 * 0.5 + 0.1)[0]
+    assert c.target(10.5 + BEATS_PER_MOVE * 0.5 + 0.1)[0] == "disco"  # next slot
+    nxt = c.target(10.5 + 2 * BEATS_PER_MOVE * 0.5 + 0.1)[0]
     assert nxt in MOVES  # queue empty: improvises
 
 
@@ -55,8 +55,9 @@ def test_improvises_calm_moves_for_quiet_music():
     c.on_tempo(tempo(loudness=0.1), now=0.0)
     picked = set()
     for slot in range(8):
-        picked.add(c.target(0.6 + slot * 2.0)[0])
-    assert picked <= set(CALM)
+        picked.add(c.target(0.6 + slot * BEATS_PER_MOVE * 0.5)[0])
+    picked.discard(None)  # before the first beat it holds the ready pose
+    assert picked and picked <= set(CALM)
 
 
 def test_low_confidence_tempo_is_ignored_and_music_gone_after_silence():
@@ -69,6 +70,19 @@ def test_low_confidence_tempo_is_ignored_and_music_gone_after_silence():
     c.on_tempo(tempo(loudness=0.0), now=8.0)
     c.on_tempo(tempo(loudness=0.0), now=15.0)
     assert c.music_gone(15.0)  # quiet for >6 s
+
+
+def test_fresh_tempo_updates_keep_the_dance_moving():
+    """The tracker reports the latest beat each second; the move sequence must keep advancing."""
+    c = Choreo(max_vel=1.0, offset=0.0, rng=random.Random(2))
+    c.on_phrase(["wave", "disco", "sway", "circles"], 0.7)
+    seen = []
+    for second in range(18):  # 120 BPM: a new 8-beat move every 4 s
+        now = 100.0 + second
+        c.on_tempo(tempo(beat_t=now - 0.01), now=now)  # slightly jittery latest-beat reports
+        seen.append(c.target(now + 0.3)[0])
+    order = [m for i, m in enumerate(seen) if m and (i == 0 or m != seen[i - 1])]
+    assert order[:4] == ["wave", "disco", "sway", "circles"]
 
 
 def test_offset_leads_the_beat():

@@ -55,6 +55,17 @@ EOF
       tail -3 $LOG
     fi
     ;;
+  dance|dance-dry)
+    # Arm the dance engine. It moves nothing until a dance call's "go Waldo" publishes dance_start.
+    pgrep -f "/waldo-mirror/.venv/bin/python dance.py" >/dev/null && { echo "dance engine already armed"; exit 1; }
+    flag=""; [ "$1" = dance-dry ] && flag="--dry-run"
+    tmux new-window -d -t waldo -n dance "$DIR/dance.sh $flag 2>/tmp/dance_stderr.log | tee /tmp/dance_live.log; echo; read -p '[dance engine exited - Enter closes this window] ' x"
+    sleep 3; tail -2 /tmp/dance_live.log
+    ;;
+  dance-off)
+    pkill -INT -f "/waldo-mirror/.venv/bin/python dance.py" && echo "dance engine disarmed (arms released if it was dancing)" || echo "dance engine was not armed"
+    sleep 3; tmux send-keys -t waldo:dance Enter 2>/dev/null; true
+    ;;
   *)
-    echo "usage: live.sh check|start|stop"; exit 2 ;;
+    echo "usage: live.sh check|start|stop|dance|dance-dry|dance-off"; exit 2 ;;
 esac

@@ -76,13 +76,18 @@ class BeatTracker:
                 lag += 0.5 * (a - c) / denom
         confidence = float(np.clip(ac[lags[i]] / ac[0], 0, 1)) if ac[0] > 0 else 0.0
 
-        # Phase: which offset within one period collects the most onset energy (last 4 s).
+        # Phase: how many frames back from the newest one the last beat fell, searched with the exact
+        # (fractional) period so the beat grid doesn't drift over the 4 s it is fitted to.
         recent = np.asarray(self.onsets)[-int(4.0 / HOP_S):]
-        period = int(round(lag))
-        comb = [recent[p::period].sum() for p in range(period)]
-        phase = int(np.argmax(comb))
-        last = phase + period * ((len(recent) - 1 - phase) // period)  # newest frame index on the beat grid
-        frames_ago = len(recent) - 1 - last
-        beat_t = self.last_frame_t - frames_ago * HOP_S - self.n_fft / self.sr / 2
+        newest = len(recent) - 1
+        k = np.arange(int(newest // lag) + 1)
+        best_back, best_score = 0.0, -np.inf
+        for back in np.arange(0.0, lag, 0.25):
+            idx = np.round(newest - back - lag * k).astype(int)
+            score = recent[idx[idx >= 0]].sum()
+            if score > best_score:
+                best_back, best_score = back, score
+        # The newest frame is centred n_fft/2 before the end of the audio; the onset lands half a hop later.
+        beat_t = self.last_frame_t - best_back * HOP_S - self.n_fft / self.sr / 2 + HOP_S / 2
         loud = float(np.sqrt(np.mean(np.square(self.rms)))) if self.rms else 0.0
         return Beat(round(60 * fps / lag, 1), beat_t, round(confidence, 2), round(min(loud * 4, 1.0), 2))

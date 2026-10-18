@@ -6,7 +6,7 @@ Flow on the call:
                 beat tracker listens; once the beat is steady Waldo asks to dance
   confirming -> the dance starts only on the phrase "go Waldo" (said) or "go" (texted): lyrics
                 are full of "yeah"s, so a plain yes doesn't count here
-  dancing    -> every 16 beats the voice agent, which hears the music, picks the next phrase of
+  dancing    -> every 32 beats the voice agent, which hears the music, picks the next phrase of
                 moves and an energy (the dance tool); the engine on Waldo moves the arms on the beat
   done       -> music stopped, "stop" was heard, or the engine stopped; Waldo talks again
 
@@ -48,7 +48,7 @@ def _fn(name: str, description: str, props: dict | None = None) -> dict:
 
 DANCE_TOOLS = [
     _fn("listen_for_music", "Start listening for the operator's music (call after asking them to play a song)."),
-    _fn("dance", "Choose the next 16 beats: 4 moves, 4 beats each, and an energy.",
+    _fn("dance", "Choose the next 32 beats: 4 moves, 8 beats each, and an energy.",
         {"moves": {"type": "array", "items": {"type": "string", "enum": MOVE_NAMES}, "minItems": 1, "maxItems": 4},
          "energy": {"type": "number", "description": "0.1 chill .. 1.0 hype"}}),
     _fn("stop_dance", "Stop dancing now."),
@@ -107,8 +107,8 @@ class DanceCall:
         elif self.state == "dancing" and self.clock() >= self.next_phrase_at and self.bpm:
             self.phrases += 1
             talk = "You may add at most 4 excited words." if self.phrases % 3 == 0 else "Do not speak."
-            await self._say(f"Choose the next 16 beats for the music you hear now: call the dance tool. {talk}")
-            self.next_phrase_at = self.clock() + 16 * 60.0 / self.bpm
+            await self._say(f"Choose the next 32 beats for the music you hear now: call the dance tool. {talk}")
+            self.next_phrase_at = self.clock() + 32 * 60.0 / self.bpm
 
     async def on_transcript(self, party: str, text: str) -> None:
         if party != "remote":

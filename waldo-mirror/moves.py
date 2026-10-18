@@ -1,6 +1,6 @@
 """Dance moves for the G1's arms (and a little waist sway). Pure numpy, testable without a robot.
 
-A move is a 4-beat pattern: given the position within it (in beats, 0..4) and an energy (0..1),
+A move is an 8-beat pattern: given the position within it (in beats, 0..8) and an energy (0..1),
 it returns the 14 arm joint angles and a waist-yaw offset. Every pose is clipped to the same
 comfort ranges as mirroring, and `fit_energy` lowers the energy until the move's fastest joint
 stays under the speed cap at the current tempo.
@@ -17,7 +17,7 @@ import numpy as np
 
 from robot import COMFORT_LOWER, COMFORT_UPPER
 
-BEATS_PER_MOVE = 4
+BEATS_PER_MOVE = 8  # long enough that travelling between poses is a small part of each move
 MAX_WAIST = 0.15  # rad, ~9 degrees of hip sway at most
 
 
@@ -42,8 +42,8 @@ BASE = (-0.35, 0.25, 0.0, 1.4)  # ready pose: arms a little forward, elbows bent
 
 
 def pump(b, e):
-    up = 0.55 * e * bump(b)
-    a = (BASE[0] - up, BASE[1], 0.0, BASE[3] - 0.3 * e * bump(b))
+    up = 0.55 * e * bump(b / 2)  # half-time: one pump every two beats, so it can be bigger under the speed cap
+    a = (BASE[0] - up, BASE[1], 0.0, BASE[3] - 0.3 * e * bump(b / 2))
     return arms(a, a), 0.0
 
 
@@ -60,7 +60,7 @@ def wave(b, e):
 
 
 def raise_roof(b, e):
-    a = (-1.6 - 0.6 * e, 0.35, 0.0, 1.3 - 0.6 * e * bump(b))
+    a = (-1.6 - 0.6 * e, 0.35, 0.0, 1.3 - 0.6 * e * bump(b / 2))
     return arms(a, a), 0.0
 
 

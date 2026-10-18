@@ -124,7 +124,7 @@ async def test_dance_tool_only_while_dancing_and_filters_moves():
     assert out["ok"] and published[-1] == {"type": "dance_phrase", "moves": ["pump", "disco"], "energy": 0.8}
 
 
-async def test_phrase_requests_every_16_beats():
+async def test_phrase_requests_every_32_beats():
     from beats import Beat
 
     clock = {"t": 100.0}
@@ -136,8 +136,8 @@ async def test_phrase_requests_every_16_beats():
     n = len(s.said)
     clock["t"] += 4.0
     await d.tick()
-    assert len(s.said) == n  # 16 beats at 120 BPM = 8 s, not yet
-    clock["t"] += 4.1
+    assert len(s.said) == n  # 32 beats at 120 BPM = 16 s, not yet
+    clock["t"] += 12.1
     await d.tick()
     assert len(s.said) == n + 1
 

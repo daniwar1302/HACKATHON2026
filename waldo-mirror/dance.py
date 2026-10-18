@@ -63,7 +63,8 @@ class Choreo:
     def __init__(self, max_vel: float, offset: float, rng: random.Random | None = None):
         self.max_vel, self.offset, self.rng = max_vel, offset, rng or random.Random()
         self.bpms: deque[float] = deque(maxlen=3)
-        self.bpm = self.beat_t = None
+        self.bpm = None
+        self.ref_t = self.ref_b = None  # continuous beat clock: beat number ref_b happened at time ref_t
         self.tempo_at = 0.0
         self.loudness = 0.0
         self.quiet_since = None
@@ -84,8 +85,16 @@ class Choreo:
         if float(e.get("confidence", 0)) < MIN_CONFIDENCE or not e.get("bpm"):
             return
         self.bpms.append(float(e["bpm"]))
+        beat_t = float(e["beat_t"])
+        if self.ref_t is None:
+            self.ref_t, self.ref_b = beat_t, 0.0
+        else:
+            # The tracker says a beat fell at beat_t: snap that moment to the nearest whole beat of our
+            # running count. The count never restarts; its phase moves by at most half a beat.
+            self.ref_b = float(round(self.ref_b + (beat_t - self.ref_t) * self.bpm / 60.0))
+            self.ref_t = beat_t
         self.bpm = float(np.median(self.bpms))
-        self.beat_t, self.tempo_at = float(e["beat_t"]), now
+        self.tempo_at = now
 
     def on_phrase(self, moves: list, energy) -> None:
         self.queue.clear()
@@ -99,8 +108,8 @@ class Choreo:
         return no_tempo or silent
 
     def beats(self, now: float) -> float:
-        """Beats since the reference beat; `offset` leads the music to make up for call and motor lag."""
-        return (now + self.offset - self.beat_t) * self.bpm / 60.0
+        """Running beat count; `offset` leads the music to make up for call and motor lag."""
+        return self.ref_b + (now + self.offset - self.ref_t) * self.bpm / 60.0
 
     def _pick(self) -> str:
         if self.queue:
