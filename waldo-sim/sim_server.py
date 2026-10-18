@@ -19,6 +19,7 @@ top-down approach at a chosen jaw angle (`approach: "down", jaw_deg`), which pen
 from __future__ import annotations
 
 import argparse
+import copy
 import io
 import json
 import math
@@ -129,10 +130,125 @@ class Devices:
         }
 
 
+class LabDevices:
+    """Lab scene: a dev board (BOOT/RESET, status LED, 4-digit display) and a machine (START/STOP, stack light,
+    pressure gauge). Odd seeds have a faulty machine whose pressure keeps climbing: over 8 bar the operator must
+    press STOP before it trips at 9.5 bar. Seeds divisible by 3 start with the board's firmware hung."""
+    OFF, GREEN, RED, BLUE, YELLOW = [0.04, 0.04, 0.04, 1], [0.1, 0.95, 0.2, 1], [1.0, 0.12, 0.08, 1], [0.02, 0.1, 1.0, 1], [1.0, 0.85, 0.1, 1]
+    SEG_ON, SEG_OFF = [1.0, 0.12, 0.08, 1], [0.05, 0.01, 0.01, 1]      # emissive: off must be near black
+    BUTTONS = {"dev_boot": "dev_board_boot", "dev_reset": "dev_board_reset", "machine_start": "machine_start", "machine_stop": "machine_stop"}
+    REBOOT_S, CYCLE_S, TRIP_BAR = 1.0, 10.0, 9.5
+
+    def __init__(self, m, d):
+        self.m, self.d = m, d
+        self.q = {k: m.joint(j).qposadr[0] for k, j in self.BUTTONS.items()}
+        self.q_needle, self.v_needle = m.joint("gauge_needle").qposadr[0], m.joint("gauge_needle").dofadr[0]
+        self.g = {"led": m.geom("dev_board_led").id, **{l: m.geom(f"stack_light_{l}").id for l in ("green", "yellow", "red")},
+                  "seg": {(k, s): m.geom(f"dev_board_seg{k}{s}").id for k in range(4) for s in "abcdefg"}}
+        self.bodies = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in scene.LAB)}
+        self.seed = 0
+        self.reset()
+
+    def reset(self):
+        for a in self.q.values():
+            self.d.qpos[a] = 0.0
+        rng = np.random.default_rng(self.seed)
+        self.rng = rng
+        self.history, self.presses = [], {k: 0 for k in self.BUTTONS}
+        self._pressed = {k: False for k in self.BUTTONS}
+        self.board = "hung" if self.seed % 3 == 0 else "app"
+        self.firmware, self.code, self.board_t = 1, f"{rng.integers(0, 10000):04d}", 0.0
+        self.machine, self.machine_t, self.pressure, self.faulty = "idle", 0.0, 0.0, self.seed % 2 == 1
+        self.shown = None
+        self.state = self.read()
+
+    def read(self):
+        return {"board": self.board, "firmware": self.firmware, "display": self.display(), "machine": self.machine,
+                "pressure_bar": round(self.pressure, 2)}
+
+    def display(self):
+        return {"app": self.code, "hung": "----", "boot": "boot", "rebooting": "    "}[self.board]
+
+    def flash(self):
+        if self.board != "boot":
+            raise ValueError(f"board is not in the bootloader (state {self.board}); hold BOOT and tap RESET first")
+        self.firmware += 1
+        self.history.append((round(self.d.time, 2), f"flashed firmware v{self.firmware}"))
+
+    def update(self):
+        d, t = self.d, self.d.time
+        for k, a in self.q.items():
+            down = d.qpos[a] < -0.0018 if k.startswith("dev") else d.qpos[a] < -0.005
+            if down and not self._pressed[k]:
+                self.presses[k] += 1
+                self.history.append((round(t, 2), f"{k} pressed"))
+                self._on_press(k, t)
+            self._pressed[k] = down
+        if self.board == "rebooting" and t - self.board_t >= self.REBOOT_S:
+            self.board, self.code = "app", f"{self.rng.integers(0, 10000):04d}"
+            self.history.append((round(t, 2), f"board up: firmware v{self.firmware}, code {self.code}"))
+        # machine: pressure follows a first-order rise while running; a faulty one keeps climbing
+        dt = self.m.opt.timestep
+        if self.machine == "running":
+            r = t - self.machine_t
+            target = 6.0 + (0.5 * (r - 4.0) if self.faulty and r > 4.0 else 0.0)
+            self.pressure += (target - self.pressure) * dt / 0.8
+            if self.pressure >= self.TRIP_BAR:
+                self.machine = "fault"
+                self.history.append((round(t, 2), "machine FAULT: overpressure trip"))
+            elif r >= self.CYCLE_S and not self.faulty:
+                self.machine = "done"
+                self.history.append((round(t, 2), "machine cycle complete"))
+        else:
+            self.pressure += (0.0 - self.pressure) * dt / 0.6
+        d.qpos[self.q_needle] = -np.radians(-135 + 27 * self.pressure)      # clockwise from up as the camera sees it
+        d.qvel[self.v_needle] = 0.0
+        self.state = self.read()
+        self._paint()
+
+    def _on_press(self, k, t):
+        if k == "dev_reset":
+            if self._pressed["dev_boot"]:
+                self.board = "boot"
+                self.history.append((round(t, 2), "board in bootloader"))
+            else:
+                self.board, self.board_t = "rebooting", t
+        elif k == "machine_start" and self.machine in ("idle", "done", "stopped"):
+            self.machine, self.machine_t = "running", t
+            self.history.append((round(t, 2), "machine running"))
+        elif k == "machine_stop" and self.machine == "running":
+            self.machine = "stopped"
+            self.history.append((round(t, 2), f"machine stopped by operator at {self.pressure:.1f} bar"))
+
+    def _paint(self):
+        key = (self.board, self.code, self.machine)
+        if key == self.shown:
+            return
+        self.shown = key
+        rgba = self.m.geom_rgba
+        rgba[self.g["led"]] = {"app": self.GREEN, "hung": self.RED, "boot": self.BLUE, "rebooting": self.OFF}[self.board]
+        for k, ch in enumerate(self.display()):
+            for sname in "abcdefg":
+                rgba[self.g["seg"][(k, sname)]] = self.SEG_ON if sname in scene.SEG[ch] else self.SEG_OFF
+        lamp = {"running": "green", "fault": "red"}.get(self.machine, "yellow")
+        for l in ("green", "yellow", "red"):
+            rgba[self.g[l]] = {"green": self.GREEN, "yellow": self.YELLOW, "red": self.RED}[l] if l == lamp else self.OFF
+
+    def targets(self):
+        m, d = self.m, self.d
+        def top(body, dz):
+            b = m.body(body).id
+            return (d.xpos[b] + d.xmat[b].reshape(3, 3) @ np.array([0, 0, dz])).round(4).tolist()
+        return {"dev_boot": {"point": top("dev_board_boot", 0.003), "push": [0, 0, -1]},
+                "dev_reset": {"point": top("dev_board_reset", 0.003), "push": [0, 0, -1]},
+                "machine_start": {"point": top("machine_start", 0.006), "push": [0, 0, -1]},
+                "machine_stop": {"point": top("machine_stop", 0.006), "push": [0, 0, -1]}}
+
+
 class Sim:
     def __init__(self, speed: float, desk: scene.Desk, item_set: str = "big", kind: str = "sort"):
         self.desk, self.item_set, self.kind = desk, item_set, kind
-        self.m = (scene.build(desk, items={}, containers={}, devices=True) if kind == "devices" else scene.build(desk))
+        self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab") else scene.build(desk))
         self.d = mujoco.MjData(self.m)
         self.speed = speed
         m = self.m
@@ -146,11 +262,11 @@ class Sim:
         self.site = {s: m.site(f"{s}_grasp").id for s in SIDES}
         self.arm_bodies = {s: {b for b in range(m.nbody) if m.body(b).name.startswith(s) and any(
             k in m.body(b).name for k in ("shoulder", "elbow", "wrist", "dex1"))} for s in SIDES}
-        self.items = {} if kind == "devices" else {n: scene.item_body(m, n) for n in scene.ITEMS}
-        self.dev = Devices(m, self.d) if kind == "devices" else None
+        self.items = {} if kind in ("devices", "lab") else {n: scene.item_body(m, n) for n in scene.ITEMS}
+        self.dev = Devices(m, self.d) if kind == "devices" else LabDevices(m, self.d) if kind == "lab" else None
         self.item_qadr = {n: m.jnt_qposadr[m.body_jntadr[b]] for n, b in self.items.items()}
         self.item_dadr = {n: m.jnt_dofadr[m.body_jntadr[b]] for n, b in self.items.items()}
-        self.containers = {} if kind == "devices" else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS}
+        self.containers = {} if kind in ("devices", "lab") else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS}
         self.static_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] == 0 or m.geom_bodyid[g] in self.containers.values()}
         mujoco.mj_forward(m, self.d)
         self.box = {n: self._aabb(b) for n, b in self.containers.items()}
@@ -252,6 +368,7 @@ class Sim:
             mujoco.mj_forward(m, d)
             self.drop = {n: self._drop_spot(lo, hi) for n, (lo, hi) in self.box.items()}
         if self.dev:
+            self.dev.seed = seed
             self.dev.reset()
         mujoco.mj_forward(m, d)
         self._hold_ctrl()
@@ -592,14 +709,18 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
     if cmd == "sim_devices":
         if not sim.dev:
             raise ValueError("not the devices scene (start with --scene devices)")
-        return {"state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
-                "targets": sim.dev.targets(), "time": round(sim.d.time, 2),
-                "devices": {n: note for n, (_k, _p, note) in scene.DEVICES.items()}}
+        notes = ({n: note for n, (_p, note) in scene.LAB.items()} if sim.kind == "lab" else
+                 {n: note for n, (_k, _p, note) in scene.DEVICES.items()})
+        return {"scene": sim.kind, "state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
+                "targets": sim.dev.targets(), "time": round(sim.d.time, 2), "devices": notes}
+    if cmd == "sim_flash":                          # the agent's USB side: flash firmware while the board is in its bootloader
+        sim.dev.flash()
+        return {"firmware": sim.dev.firmware}
     if cmd == "sim_save":                           # snapshot the whole world (try something, then roll back)
         snap = {"qpos": sim.d.qpos.copy(), "qvel": sim.d.qvel.copy(), "act": sim.d.act.copy(), "ctrl": sim.d.ctrl.copy(),
                 "time": sim.d.time, "enabled": sim.enabled}
         if sim.dev:
-            snap["dev"] = (dict(sim.dev.state), list(sim.dev.history), dict(sim.dev.presses), dict(sim.dev._pressed), sim.dev.power_on_t)
+            snap["dev"] = {k: copy.deepcopy(v) for k, v in vars(sim.dev).items() if k not in ("m", "d", "rng")}
         sim.snapshots[r.get("name", "default")] = snap
         return {}
     if cmd == "sim_restore":
@@ -607,8 +728,10 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         sim.d.qpos[:], sim.d.qvel[:], sim.d.act[:], sim.d.ctrl[:] = snap["qpos"], snap["qvel"], snap["act"], snap["ctrl"]
         sim.d.time, sim.enabled = snap["time"], snap["enabled"]
         if sim.dev:
-            st, hist, pr, prd, pt = snap["dev"]
-            sim.dev.state, sim.dev.history, sim.dev.presses, sim.dev._pressed, sim.dev.power_on_t = dict(st), list(hist), dict(pr), dict(prd), pt
+            for k, v in snap["dev"].items():
+                setattr(sim.dev, k, copy.deepcopy(v))
+            if hasattr(sim.dev, "shown"):
+                sim.dev.shown = None
         mujoco.mj_forward(sim.m, sim.d)
         return {}
     if cmd == "sim_get_world":                      # whole-world state, to seed a twin sim (the real robot: from perception)
@@ -654,7 +777,8 @@ def main():
     ap.add_argument("--desk-top", type=float, default=scene.Desk.top_z, help="desk top z in the pelvis frame (m)")
     ap.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer window (watch it live)")
     ap.add_argument("--items", default="big", choices=sorted(scene.ITEM_SETS), help="item set desks are drawn from")
-    ap.add_argument("--scene", default="sort", choices=["sort", "devices"], help="desk sorting, or switches/buttons")
+    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab"],
+                    help="desk sorting, IT switches/buttons, or lab (dev board + machine tending)")
     ap.add_argument("--port-offset", type=int, default=0, help="add to every port (run several sims side by side)")
     a = ap.parse_args()
     global ARM_PORT, CFG_PORT, DEPTH_PORT, HTTP_PORT

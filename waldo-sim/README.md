@@ -29,6 +29,10 @@ crayons. Sorting: writing → pen cup, supplies → tray, tools → caddy. Items
 | `media/waldo_sim_sort.gif` | ~30 s of the sim sorting in real time |
 | `bench_sort.py` | N seeded desks, every item picked and dropped in its container, scored on where it lands |
 | `fetch_assets.sh` | pulls the URDF/meshes from Waldo and the scanned objects (assets aren't in git) |
+| `teach.py` | auto-teach + replay for fixed stations (IT desk and lab): search presses on the twin, keep the fastest the sim verifies, replay with phases (tap, press-and-hold, release, hover, poke) |
+| `agent_lab.py` | the lab driven only through waldo-arms MCP tools, every step verified by sensing |
+| `stations_sim.json`, `gauges_sim.json` | the sim cell's registered containers and gauge (one-time setup, as on a real cell) |
+| `media/lab_agent_demo.gif` | room view + head camera: firmware update with a two-hand BOOT+RESET, then machine tending with a STOP on overpressure |
 
 ## Run
 
@@ -39,6 +43,31 @@ uv run --with mujoco --with pyzmq --with numpy waldo-sim/bench_sort.py --trials 
 ```
 Any MCP client can drive it through `waldo-arms` with `G1_ARM_ADDR=tcp://localhost:15810 G1_CAM_BASE=http://localhost:18766
 G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs a GL context (`glfw` in a desktop session).
+
+## Scenes
+
+`--scene sort` (desk + containers + items), `--scene devices` (IT desk: power strip, router, 2FA key, start button,
+light switch), `--scene lab`:
+
+* **Dev board (coding agents, hardware-in-the-loop):** BOOT and RESET buttons 13 cm apart (one per hand), status LED
+  (green app / red hung / blue bootloader), 4-digit 7-segment display showing a pairing code. Seeds divisible by 3
+  start hung. `sim_flash` is the USB side (esptool / dfu-util on a real board) and only works in the bootloader.
+* **Machine tending (manufacturing):** START/STOP mushrooms, red/yellow/green stack light, 0-10 bar gauge facing the
+  camera. A cycle runs ~10 s at ~6 bar; odd seeds have a fault that keeps climbing and trips at 9.5 bar unless
+  someone presses STOP.
+
+Results (2026-10-17):
+
+| | |
+|---|---|
+| IT desk tasks, taught + replayed (`teach.py bench --rounds 5`) | **20/20** |
+| lab tasks incl. two-hand bootloader combo, hover, poke (`teach.py bench --rounds 5`) | **30/30** |
+| agent firmware update via MCP tools only (hung-board recovery, BOOT+RESET, flash, reset, code read off the display) | **6/6**, display codes read exactly |
+| agent machine tending via MCP tools only (start, hover over STOP, poll the gauge, stop over 8 bar) | **6/6**; every fault stopped at 8.0 bar, before the 9.5 bar trip; gauge error mean ~0.1 bar |
+
+Lessons: indicators must be emissive (lit by scene light they read wrong from their shaded side); the camera sees
+a lamp's near face, not its axis; a gauge is read in image angles, so register it with where its min/max ticks
+appear; teaching the fastest of several verified candidates plus a "hover" over STOP is what makes stopping fast.
 
 ## What it has taught us (2026-10-17)
 

@@ -57,7 +57,10 @@ mcp = MCPServer("waldo-arms", instructions=(
     "FAST PATH (skills, one call each, planned + collision-checked + verified): pick(u, v) the object under a point "
     "-> place(side, container=name) (list_containers; register_container once per station) or place(side, u, v) "
     "under a point -> home(side). Fixed devices: list_controls, "
-    "run_task(name) (e.g. power_cycle_router). Check results with read_light(points) (~50 ms) or look."))
+    "run_task(name) (e.g. power_cycle_router, enter_bootloader, start_cycle, arm_stop, stop_machine). "
+    "SENSE, ~50 ms, no VLM: read_light(points), read_display(box) for 7-segment codes, read_gauge(name) for dials "
+    "(register_gauge once). Poll them to verify every action and to watch a running machine. Every physical action "
+    "leaves a receipt (receipts, show_receipt: before/after frames)."))
 
 
 class _Arm:
@@ -490,7 +493,9 @@ def look(camera: str = "head_camera", annotate: bool = True) -> Image:
 
 # ---------- skills: one call per intent, for agents and onboard VLAs that only point ----------
 STATIONS = Path(os.environ.get("G1_STATIONS", Path(__file__).resolve().parent / "stations.json"))
-TAUGHT = Path(os.environ.get("G1_TAUGHT", Path(__file__).resolve().parent.parent / "waldo-sim" / "taught.json"))
+TAUGHT_DIR = Path(os.environ.get("G1_TAUGHT_DIR", Path(__file__).resolve().parent.parent / "waldo-sim"))
+GAUGES = Path(os.environ.get("G1_GAUGES", Path(__file__).resolve().parent / "gauges.json"))
+RECEIPTS = Path(os.environ.get("G1_RECEIPTS", Path(__file__).resolve().parent / "receipts"))
 _plan = None
 
 
@@ -569,8 +574,9 @@ def pick(u: float | None = None, v: float | None = None, box: list[float] | None
             raise ToolError(f"object is {g['width'] * 1000:.0f} mm across its narrow side; the Dex1 opens to ~90 mm")
         rim = max(0.0, min(g["width"], g["length"]) / 2 - 0.006)     # pinch the wall of a ring (tape roll)
     p = _planner()
-    r = _skill(lambda: p.pick_item(np.array(g["centre"]), g["jaw_deg"], height_m=g["height"],
-                                   prefer_side=_side(side) if side else None, rim_radius_m=rim))
+    r = _receipt("pick", {"u": u, "v": v, "box": box, "side": side},
+                 lambda: _skill(lambda: p.pick_item(np.array(g["centre"]), g["jaw_deg"], height_m=g["height"],
+                                                    prefer_side=_side(side) if side else None, rim_radius_m=rim)))
     return {"side": r["side"], "held": True, "gripper_gap_mm": r["gripper"].get("gap_mm"),
             "grasp": {"jaw_deg": r["jaw_deg"], "pitch_deg": r["pitch_deg"], "tries": len(r["attempts"])},
             "object": {k: (round(g[k], 3) if isinstance(g[k], float) else g[k]) for k in ("height", "width", "length", "ring")},
@@ -621,7 +627,8 @@ def place(side: str, container: str | None = None, u: float | None = None, v: fl
         g = _object_at(u, v, scale, box)
         at = g.get("point")
     p = _planner()
-    _skill(lambda: p.place(side, g["box_min"], g["box_max"], at=at) or {})
+    _receipt("place", {"side": side, "container": container, "u": u, "v": v, "box": box},
+             lambda: _skill(lambda: p.place(side, g["box_min"], g["box_max"], at=at) or {}))
     return {"side": side, "released": True, "container": container or "pointed",
             "drop_xy": [round(c, 3) for c in (at or [])[:2]], "rim_z": round(g["box_max"][2], 3)}
 
@@ -633,51 +640,232 @@ def home(side: str = "both") -> str:
     sides = ["left", "right"] if side == "both" else [_side(side)]
     p = _planner()
     for s in sides:
-        _skill(lambda: p.home(s) or {})
+        _receipt("home", {"side": s}, lambda: _skill(lambda: p.home(s) or {}))
     return f"{', '.join(sides)} at rest"
 
 
+def _teach():
+    import sys
+    if str(TAUGHT_DIR) not in sys.path:
+        sys.path.insert(0, str(TAUGHT_DIR))
+    import teach
+    return teach
+
+
 def _taught() -> dict:
-    if not TAUGHT.exists():
-        raise ToolError(f"no taught controls at {TAUGHT}; teach them first (waldo-sim/teach.py)")
-    return json.loads(TAUGHT.read_text())
+    """Every station's taught controls (taught.json = IT desk, taught_lab.json = dev board + machine)."""
+    out = {}
+    for f in sorted(TAUGHT_DIR.glob("taught*.json")):
+        out.update(json.loads(f.read_text()))
+    if not out:
+        raise ToolError(f"no taught controls in {TAUGHT_DIR}; teach them first (waldo-sim/teach.py)")
+    return out
 
 
 @mcp.tool()
 def list_controls() -> dict:
     """Fixed-station controls (switches, buttons, keys) and multi-step tasks taught for this cell. Taught motions
-    are verified joint trajectories: the fastest, most reliable way to operate a known device."""
-    import sys
-    sys.path.insert(0, str(TAUGHT.parent))
-    import teach
-    return {"controls": {n: t["side"] for n, t in _taught().items()},
-            "tasks": {n: [c for c, _ in steps] for n, steps in teach.TASKS.items()}}
+    are verified joint trajectories: the fastest, most reliable way to operate a known device. A task is available
+    when all its controls are taught."""
+    teach, taught = _teach(), _taught()
+    return {"controls": {n: t["side"] for n, t in taught.items()},
+            "tasks": {n: [s[0] if len(s) < 3 else f"{s[0]}:{s[2]}" for s in steps] for n, steps in teach.ALL_TASKS.items()
+                      if all(s[0] in taught for s in steps)},
+            "phases": "tap | press (and hold) | release | hover (fingertip parked above, ready) | poke (fast press from hover) | rest"}
+
+
+def _receipt(tool: str, args: dict, fn):
+    """Proof of a physical action: head-camera frames before and after, the arguments and the result, appended to
+    receipts/receipts.jsonl. Agents (and their humans) can show what the robot actually did."""
+    RECEIPTS.mkdir(parents=True, exist_ok=True)
+    rid = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}-{tool}"
+    def snap(tag):
+        try:
+            with urllib.request.urlopen(f"{CAM}/frame/head_camera.jpg", timeout=3) as r:
+                (RECEIPTS / f"{rid}_{tag}.jpg").write_bytes(r.read())
+            return f"{rid}_{tag}.jpg"
+        except OSError:
+            return None
+    rec = {"id": rid, "tool": tool, "args": args, "before": snap("before")}
+    t0 = time.monotonic()
+    try:
+        out = fn()
+        rec.update(ok=True, result=out)
+        return out
+    except ToolError as e:
+        rec.update(ok=False, error=str(e))
+        raise
+    finally:
+        rec["ms"] = round((time.monotonic() - t0) * 1000)
+        rec["after"] = snap("after")
+        with open(RECEIPTS / "receipts.jsonl", "a") as f:
+            f.write(json.dumps(rec, default=str) + "\n")
 
 
 @mcp.tool()
-def run_task(name: str) -> dict:
-    """Run a taught task (e.g. power_cycle_router, approve_2fa, start_machine, light_on) or a single taught control by
-    name. See list_controls. Waits between steps (router off 5 s) are part of the task."""
-    import sys
-    sys.path.insert(0, str(TAUGHT.parent))
-    import teach
-    taught = _taught()
-    steps = teach.TASKS.get(name) or ([(name, 0.0)] if name in taught else None)
+def receipts(last: int = 5) -> list[dict]:
+    """The most recent physical actions (pick, place, home, run_task): what was asked, what happened, how long it
+    took, and before/after head-camera frames (ids for show_receipt)."""
+    f = RECEIPTS / "receipts.jsonl"
+    if not f.exists():
+        return []
+    return [json.loads(line) for line in f.read_text().splitlines()[-max(1, min(last, 50)):]]
+
+
+@mcp.tool()
+def show_receipt(receipt_id: str) -> Image:
+    """Before | after head-camera frames of one action, side by side (receipt ids from receipts)."""
+    from PIL import Image as PILImage
+    ims = []
+    for tag in ("before", "after"):
+        p = RECEIPTS / f"{receipt_id}_{tag}.jpg"
+        if not p.exists():
+            raise ToolError(f"no {tag} frame for receipt {receipt_id!r}")
+        ims.append(PILImage.open(p).convert("RGB"))
+    w, h = ims[0].size
+    out = PILImage.new("RGB", (w * 2, h))
+    out.paste(ims[0], (0, 0))
+    out.paste(ims[1], (w, 0))
+    buf = io.BytesIO()
+    out.save(buf, "JPEG", quality=80)
+    return Image(data=buf.getvalue(), format="jpeg")
+
+
+@mcp.tool()
+def run_task(name: str, phase: str = "tap") -> dict:
+    """Run a taught task (list_controls: power_cycle_router, approve_2fa, light_on, reset_board, enter_bootloader,
+    start_cycle, arm_stop, stop_machine, ...) or one taught control with a phase (tap, press, release, hover, poke,
+    rest). Waits and two-hand holds are part of the task (enter_bootloader holds BOOT while the other hand taps
+    RESET). Verify after with read_light / read_display / read_gauge."""
+    teach, taught = _teach(), _taught()
+    steps = teach.ALL_TASKS.get(name) or ([(name, 0.0, phase)] if name in taught else None)
     if steps is None:
-        raise ToolError(f"unknown task or control {name!r}; known: {sorted(teach.TASKS) + sorted(taught)}")
-    missing = [c for c, _ in steps if c not in taught]
+        raise ToolError(f"unknown task or control {name!r}; known: {sorted(teach.ALL_TASKS) + sorted(taught)}")
+    if phase not in teach.PHASES:
+        raise ToolError(f"phase must be one of {list(teach.PHASES)}")
+    missing = [s[0] for s in steps if s[0] not in taught]
     if missing:
         raise ToolError(f"not taught yet: {missing}")
     def go():
         arm("enable")
-        for ctl, wait in steps:
-            teach.play(_parm, ctl, taught)
-            if wait:
-                _parm("sim_wait", seconds=wait)
+        if name in teach.ALL_TASKS:
+            teach.run(_parm, name, taught)
+        else:
+            teach.play(_parm, name, taught, phase)
         return {}
-    out = _skill(go)
-    return {"task": name, "done": [c for c, _ in steps], "ms": out["ms"],
-            "verify": "call read_light / look to confirm the device changed state"}
+    out = _receipt("run_task", {"name": name, "phase": phase}, lambda: _skill(go))
+    return {"task": name, "done": [s[0] for s in steps], "ms": out["ms"]}
+
+
+def _frame() -> np.ndarray:
+    from PIL import Image as PILImage
+    try:
+        with urllib.request.urlopen(f"{CAM}/frame/head_camera.jpg", timeout=5) as r:
+            return np.asarray(PILImage.open(io.BytesIO(r.read())).convert("RGB"), np.float32) / 255
+    except OSError as e:
+        raise ToolError(f"camera unreachable at {CAM} ({e})")
+
+
+def _crop(im, box, scale):
+    H, W, _ = im.shape
+    try:
+        u1, v1 = vision.to_pixels(float(box[0]), float(box[1]), scale, W, H)
+        u2, v2 = vision.to_pixels(float(box[2]), float(box[3]), scale, W, H)
+    except (ValueError, TypeError, IndexError):
+        raise ToolError("box is [u1, v1, u2, v2]; scale pixels, norm1000 or norm1")
+    u1, u2, v1, v2 = int(max(0, min(u1, u2))), int(min(W, max(u1, u2))), int(max(0, min(v1, v2))), int(min(H, max(v1, v2)))
+    if u2 - u1 < 4 or v2 - v1 < 4:
+        raise ToolError("box too small or outside the image")
+    return im[v1:v2, u1:u2]
+
+
+SEGMENTS = {"a": (0.5, 0.1), "b": (0.85, 0.3), "c": (0.85, 0.7), "d": (0.5, 0.9), "e": (0.15, 0.7), "f": (0.15, 0.3), "g": (0.5, 0.5)}
+SEG_CHARS = {"abcdef": "0", "bc": "1", "abdeg": "2", "abcdg": "3", "bcfg": "4", "acdfg": "5", "acdefg": "6", "abc": "7",
+             "abcdefg": "8", "abcdfg": "9", "g": "-", "cdefg": "b", "cdeg": "o", "defg": "t", "": " ", "adefg": "E",
+             "aefg": "F", "bcefg": "H", "def": "L", "abefg": "P", "bcdef": "U"}
+
+
+def seven_segment(crop: np.ndarray, digits: int) -> tuple[str, list[float]]:
+    """Decode a 7-segment display: split into digit cells, test each segment's spot for lit pixels."""
+    v = crop.max(2)
+    lit = v > max(0.4, 0.55 * float(v.max()))
+    h, w = lit.shape
+    text, conf = "", []
+    for k in range(digits):
+        cell = lit[:, int(k * w / digits):int((k + 1) * w / digits)]
+        ch, cw = cell.shape
+        on, margins = "", []
+        for sname, (x, y) in SEGMENTS.items():
+            win = cell[int(max(0, (y - 0.08) * ch)):int((y + 0.08) * ch) + 1, int(max(0, (x - 0.1) * cw)):int((x + 0.1) * cw) + 1]
+            f = float(win.mean()) if win.size else 0.0
+            margins.append(abs(f - 0.3))
+            if f > 0.3:
+                on += sname
+        text += SEG_CHARS.get(on, "?")
+        conf.append(round(min(1.0, 2 * min(margins)), 2))
+    return text, conf
+
+
+@mcp.tool()
+def read_display(box: list[float], digits: int = 4, scale: str = "pixels") -> dict:
+    """Read a 7-segment / LED digit display (dev-board code, timer, meter) inside a tight box [u1, v1, u2, v2] around
+    the digits on the head image. Deterministic and ~50 ms (no VLM). '?' marks a digit it couldn't decode: re-box or
+    look closer. For free text (labels, screens), use look and read it yourself."""
+    text, conf = seven_segment(_crop(_frame(), box, scale), int(digits))
+    return {"text": text, "digit_confidence": conf}
+
+
+def _gauges() -> dict:
+    return json.loads(GAUGES.read_text()) if GAUGES.exists() else {}
+
+
+@mcp.tool()
+def register_gauge(name: str, box: list[float], min_value: float, max_value: float, min_deg: float = -135.0,
+                   max_deg: float = 135.0, unit: str = "", alarm_above: float | None = None, scale: str = "pixels") -> dict:
+    """Remember an analog dial gauge once: its box on the head image and its scale (needle angle clockwise from
+    straight up at min_value and at max_value; most gauges sweep -135..+135). Then read_gauge(name)."""
+    g = _gauges()
+    g[name] = {"box": [float(c) for c in box], "scale": scale, "min_value": min_value, "max_value": max_value,
+               "min_deg": min_deg, "max_deg": max_deg, "unit": unit, "alarm_above": alarm_above}
+    GAUGES.write_text(json.dumps(g, indent=1))
+    return {name: g[name]}
+
+
+def needle_angle(crop: np.ndarray) -> tuple[float, int]:
+    """Needle direction in a dial crop, degrees clockwise from up: the red needle's pixels around the dial centre
+    (the centroid of the white face). Returns (angle, needle pixel count)."""
+    r, g, b = crop[..., 0], crop[..., 1], crop[..., 2]
+    needle = (r > 0.45) & (r - g > 0.3) & (r - b > 0.3)
+    face = (crop.min(2) > 0.75)
+    if needle.sum() < 5 or face.sum() < 20:
+        raise ToolError("no dial face / red needle found in the gauge box")
+    fy, fx = np.nonzero(face)
+    cy, cx = fy.mean(), fx.mean()
+    ny, nx = np.nonzero(needle)
+    dx, dy = nx - cx, ny - cy
+    wgt = np.hypot(dx, dy)
+    ang = np.degrees(np.arctan2((dx * wgt).sum(), (-dy * wgt).sum()))
+    return float(ang), int(needle.sum())
+
+
+@mcp.tool()
+def read_gauge(name: str | None = None, box: list[float] | None = None, scale: str = "pixels") -> dict:
+    """Read an analog gauge (registered by name, or a box with the default 0-10 / -135..+135 scale): needle angle ->
+    value, with the alarm flag if registered. ~50 ms, no VLM: poll it while a machine runs."""
+    if name is not None:
+        g = _gauges().get(name)
+        if g is None:
+            raise ToolError(f"unknown gauge {name!r}; registered: {sorted(_gauges())}")
+    elif box is not None:
+        g = {"box": box, "scale": scale, "min_value": 0.0, "max_value": 10.0, "min_deg": -135.0, "max_deg": 135.0, "unit": "", "alarm_above": None}
+    else:
+        raise ToolError("give a registered gauge name or a box")
+    ang, n = needle_angle(_crop(_frame(), g["box"], g["scale"]))
+    val = g["min_value"] + (ang - g["min_deg"]) / (g["max_deg"] - g["min_deg"]) * (g["max_value"] - g["min_value"])
+    out = {"value": round(val, 2), "unit": g["unit"], "needle_deg": round(ang, 1), "needle_pixels": n}
+    if g.get("alarm_above") is not None:
+        out["alarm"] = bool(val > g["alarm_above"])
+    return out
 
 
 @mcp.tool()
@@ -702,7 +890,9 @@ def read_light(points: list[list[float]], scale: str = "pixels") -> dict:
             continue
         bright = patch[patch.max(1) >= np.percentile(patch.max(1), 70)].mean(0)     # the lit part of the patch
         hh, ss, vv = colorsys.rgb_to_hsv(*bright)
-        hue = ("red", "orange", "yellow", "green", "green", "cyan", "blue", "blue", "purple", "magenta", "red")[min(10, int(hh * 360 / 34))]
+        deg = hh * 360
+        hue = next(n for lim, n in ((15, "red"), (40, "orange"), (70, "yellow"), (165, "green"), (200, "cyan"),
+                                    (260, "blue"), (290, "purple"), (340, "magenta"), (361, "red")) if deg < lim)
         on = vv > 0.55 and (ss > 0.35 or vv > 0.9)
         out.append({"u": ui, "v": vi, "on": bool(on), "colour": hue if ss > 0.25 else "white",
                     "brightness": round(float(vv), 2), "saturation": round(float(ss), 2)})

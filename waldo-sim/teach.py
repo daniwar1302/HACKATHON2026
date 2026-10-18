@@ -24,14 +24,20 @@ sys.path.insert(0, str(HERE.parent / "waldo-arms"))
 from motion import Twin, cartesian_path, timed  # noqa: E402
 from planner import Arm, PlanError, Planner  # noqa: E402
 
-TAUGHT = HERE / "taught.json"
-# control -> (depth m, check(before, after) -> bool, precondition description)
+# control -> (depth m, check(before, after) -> bool)
+pressed = lambda k: (lambda b, a: a["presses"][k] == b["presses"][k] + 1)
 CONTROLS = {
     "power_strip_off_end": (0.006, lambda b, a: b["state"]["strip_on"] and not a["state"]["strip_on"]),
     "power_strip_on_end": (0.006, lambda b, a: not b["state"]["strip_on"] and a["state"]["strip_on"]),
     "security_key_pad": (0.004, lambda b, a: a["presses"]["security_key"] == b["presses"]["security_key"] + 1),
     "start_button": (0.009, lambda b, a: a["presses"]["start_button"] == b["presses"]["start_button"] + 1),
     "light_switch_lever_top": (0.012, lambda b, a: not b["state"]["light_on"] and a["state"]["light_on"]),
+}
+LAB_CONTROLS = {
+    "dev_boot": (0.004, pressed("dev_boot")),
+    "dev_reset": (0.004, pressed("dev_reset")),
+    "machine_start": (0.009, pressed("machine_start")),
+    "machine_stop": (0.009, pressed("machine_stop")),
 }
 
 
@@ -58,17 +64,17 @@ def candidates(p: Planner, twin: Twin, q0, point, push, depth):
                     yield side, dirn, approach, press
 
 
-def teach(arm, twin, p, only=None):
+def teach(arm, twin, p, controls, path, only=None):
     arm("sim_reset", seed=0)
     arm("enable")
     for sd in ("left", "right"):
         arm("grasp", side=sd)                # poke with closed fingertips
     q0 = np.array(arm("state")["arm"]["q"], float)
-    taught = json.loads(TAUGHT.read_text()) if TAUGHT.exists() else {}
-    for name, (depth, ok) in CONTROLS.items():
+    taught = json.loads(path.read_text()) if path.exists() else {}
+    for name, (depth, ok) in controls.items():
         if only and name not in only:
             continue
-        t0, tried, found = time.time(), 0, None
+        t0, tried, found, verified = time.time(), 0, None, 0
         tg = arm("sim_devices")["targets"][name]
         arm("sim_save", name="teach")
         for side, dirn, approach, press in candidates(p, twin, q0, tg["point"], tg["push"], depth):
@@ -85,48 +91,106 @@ def teach(arm, twin, p, only=None):
                 good = False
                 why = str(e)[:80]
             if good:
-                found = {"side": side, "push": np.round(dirn, 4).tolist(),
-                         "approach": [list(map(float, q)) for q in approach], "press": [list(map(float, q)) for q in press]}
-                break
+                dur = timed(approach)[1][-1] + timed(press)[1][-1]
+                if found is None or dur < found["seconds"]:
+                    found = {"side": side, "push": np.round(dirn, 4).tolist(), "seconds": round(dur, 2),
+                             "approach": [list(map(float, q)) for q in approach], "press": [list(map(float, q)) for q in press]}
+                    arm("sim_save", name="teach_best")
+                verified += 1
+                if verified >= 3 or tried >= 12:
+                    break
             arm("sim_restore", name="teach")
         if found:
             taught[name] = found
+            arm("sim_restore", name="teach_best")
             arm("sim_save", name="teach")    # keep the device's new state (e.g. strip OFF before teaching ON)
-            print(f"{name:24s} TAUGHT  {found['side']} push {found['push']}  ({tried} tried, {time.time() - t0:.0f} s)", flush=True)
+            print(f"{name:24s} TAUGHT  {found['side']} push {found['push']}  {found['seconds']} s motion  ({tried} tried, {time.time() - t0:.0f} s)", flush=True)
         else:
             print(f"{name:24s} FAILED  ({tried} tried, {time.time() - t0:.0f} s)", flush=True)
             arm("sim_restore", name="teach")
-    TAUGHT.write_text(json.dumps(taught))
+    path.write_text(json.dumps(taught))
     return taught
 
 
-def play(arm, name, taught):
-    """Run one taught control from the rest pose (where teaching started)."""
+PHASES = {"tap": "A P W p a", "press": "A P W", "release": "p a", "hover": "A", "poke": "P W p", "rest": "a"}
+
+
+def play(arm, name, taught, phase="tap"):
+    """Run a taught control. phase: tap (from rest: press and let go, back to rest), press (press and stay: hold BOOT
+    while the other hand works), release (let go, back to rest), hover (fingertip parked just above it, ready),
+    poke (press and let go from the hover: a fast stop), rest (from the hover back to rest). Segments: A approach,
+    P press in, W dwell, p press out, a approach back. Missing preconditions are fixed first (poke from rest hovers)."""
     t = taught[name]
     side = t["side"]
-    q_now = np.array(arm("state")["arm"]["q"], float)
-    start = np.array(t["approach"][0], float)
     sl = slice(0, 7) if side == "left" else slice(7, 14)
-    if np.abs(q_now[sl] - start[sl]).max() > 0.05:         # not at rest: go there first (straight joint move)
-        mid = q_now.copy()
-        mid[sl] = start[sl]
-        send(arm, side, [q_now, mid])
+    approach, press = np.array(t["approach"], float), np.array(t["press"], float)
+
+    def go(path, contact=False):
+        q_now = np.array(arm("state")["arm"]["q"], float)
+        P = np.array(path, float)
+        if np.abs(q_now[sl] - P[-1, sl]).max() < 0.03:         # already there (e.g. hover while hovering)
+            return
+        P[:, slice(7, 14) if side == "left" else slice(0, 7)] = q_now[slice(7, 14) if side == "left" else slice(0, 7)]
+        if np.abs(q_now[sl] - P[0, sl]).max() > 0.05:          # not where this segment starts: straight joint move there
+            P = np.vstack([q_now, P])
+        send(arm, side, list(P), contact=contact)
+
+    segs = PHASES[phase].split()
     q_now = np.array(arm("state")["arm"]["q"], float)
-    other = slice(7, 14) if side == "left" else slice(0, 7)
-    fix = lambda path: [np.concatenate([np.asarray(q)[:7], q_now[7:]]) if side == "left" else np.concatenate([q_now[:7], np.asarray(q)[7:]]) for q in path]
-    arm("grasp", side=side)
-    send(arm, side, fix(t["approach"]))
-    send(arm, side, fix(t["press"]), contact=True)
-    arm("sim_wait", seconds=0.3)
-    send(arm, side, fix(t["press"][::-1]), contact=True)
-    send(arm, side, fix(t["approach"][::-1]))
+    if segs[0] == "P" and np.abs(q_now[sl] - press[0][sl]).max() > 0.05:   # poke while not hovering: hover first
+        segs = ["A"] + segs
+    for sg in segs:
+        if sg == "A":
+            arm("grasp", side=side)
+            go(approach)
+        elif sg == "P":
+            go(press, contact=True)
+        elif sg == "W":
+            arm("sim_wait", seconds=0.25)
+        elif sg == "p":
+            go(press[::-1], contact=True)
+        elif sg == "a":
+            go(approach[::-1])
 
 
-TASKS = {   # what an agent asks for -> taught controls (+ waits)
+TASKS = {   # what an agent asks for -> taught controls (+ wait after, + phase)
     "power_cycle_router": [("power_strip_off_end", 5.0), ("power_strip_on_end", 4.0)],
     "approve_2fa": [("security_key_pad", 0.0)],
     "start_machine": [("start_button", 0.0)],
     "light_on": [("light_switch_lever_top", 0.0)],
+}
+LAB_TASKS = {
+    "reset_board": [("dev_reset", 1.5)],
+    "enter_bootloader": [("dev_boot", 0.0, "press"), ("dev_reset", 0.3), ("dev_boot", 0.0, "release")],
+    "start_cycle": [("machine_start", 0.0)],
+    "stop_machine": [("machine_stop", 0.0, "poke")],      # from the hover if armed (fast), else from rest
+    "arm_stop": [("machine_stop", 0.0, "hover")],         # park a fingertip over STOP while watching the gauge
+    "disarm_stop": [("machine_stop", 0.0, "rest")],
+}
+SCENES = {"devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json")}
+ALL_TASKS = {**TASKS, **LAB_TASKS}
+
+
+def run(arm, task, taught):
+    """Do an agent-level task: its taught controls in order, with waits and hold phases."""
+    for step in ALL_TASKS[task]:
+        ctl, wait, phase = (step + ("tap",))[:3]
+        play(arm, ctl, taught, phase)
+        if wait:
+            arm("sim_wait", seconds=wait)
+
+
+CHECKS = {   # task -> did it work, from the sim's device state and the events since the task began
+    "power_cycle_router": lambda d, ev: "router power OFF" in ev and "router power ON" in ev and "router internet UP" in ev,
+    "approve_2fa": lambda d, ev: "security_key pressed" in ev,
+    "start_machine": lambda d, ev: "start_button pressed" in ev,
+    "light_on": lambda d, ev: d["state"]["light_on"],
+    "reset_board": lambda d, ev: d["state"]["board"] == "app" and any(e.startswith("board up") for e in ev),
+    "enter_bootloader": lambda d, ev: d["state"]["board"] == "boot",
+    "start_cycle": lambda d, ev: d["state"]["machine"] == "running",
+    "stop_machine": lambda d, ev: d["state"]["machine"] == "stopped",
+    "arm_stop": lambda d, ev: True,          # motion-only: a failure raises
+    "disarm_stop": lambda d, ev: True,
 }
 
 
@@ -138,14 +202,16 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     a = ap.parse_args()
     arm = Arm(a.addr)
-    twin = Twin(arm("sim_objects")["desk_top_z"], kind="devices")
+    kind = arm("sim_devices")["scene"]
+    controls, tasks_all, path = SCENES[kind]
+    twin = Twin(arm("sim_objects")["desk_top_z"], kind=kind)
     twin.PAD = 0.002          # the sim validates every candidate; plan with a small pad
     p = Planner(arm, arm("sim_objects")["desk_top_z"], twin=False)
     if a.mode == "teach":
-        teach(arm, twin, p, [a.task] if a.task else None)
+        teach(arm, twin, p, controls, path, [a.task] if a.task else None)
         return
-    taught = json.loads(TAUGHT.read_text())
-    tasks = [a.task] if a.task else list(TASKS)
+    taught = json.loads(path.read_text())
+    tasks = [a.task] if a.task else list(tasks_all)
     ok_n = tot = 0
     for rnd in range(a.rounds if a.mode == "bench" else 1):
         arm("sim_reset", seed=rnd)
@@ -153,15 +219,10 @@ def main():
         for task in tasks:
             t0 = arm("sim_devices")["time"]
             try:
-                for ctl, wait in TASKS[task]:
-                    play(arm, ctl, taught)
-                    if wait:
-                        arm("sim_wait", seconds=wait)
+                run(arm, task, taught)
                 d = arm("sim_devices")
                 ev = [e for t, e in d["history"] if t >= t0]
-                good = {"power_cycle_router": "router power OFF" in ev and "router power ON" in ev and "router internet UP" in ev,
-                        "approve_2fa": "security_key pressed" in ev, "start_machine": "start_button pressed" in ev,
-                        "light_on": d["state"]["light_on"]}[task]
+                good = CHECKS[task](d, ev)
                 why = "; ".join(ev)
             except PlanError as e:
                 good, why = False, str(e)[:100]

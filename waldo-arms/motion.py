@@ -33,7 +33,8 @@ REST = {"left": np.array([0.10, 0.20, 0.0, 0.90, 0.0, 0.0, 0.0]),
 
 class Twin:
     def __init__(self, desk_top_z: float = -0.06, seed: int = 0, kind: str = "sort"):
-        self.m = (scene.build(scene.Desk(top_z=desk_top_z), items={}, containers={}, devices=True) if kind == "devices"
+        stations = kind in ("devices", "lab")
+        self.m = (scene.build(scene.Desk(top_z=desk_top_z), items={}, containers={}, devices=kind) if stations
                   else scene.build(scene.Desk(top_z=desk_top_z)))
         self.d = mujoco.MjData(self.m)
         m = self.m
@@ -44,14 +45,15 @@ class Twin:
         self.arm_bodies = {s: {b for b in range(m.nbody) if m.body(b).name.startswith(s) and any(
             k in m.body(b).name for k in ("shoulder", "elbow", "wrist", "dex1"))} for s in SIDES}
         self.fingers = {s: {m.body(f"{s}_dex1_finger_link_{k}").id for k in (1, 2)} for s in SIDES}
-        self.containers = set() if kind == "devices" else {m.body(f"{n}_model").id for n in scene.CONTAINERS}
+        self.containers = set() if stations else {m.body(f"{n}_model").id for n in scene.CONTAINERS}
         # devices are obstacles to plan around (they count like containers), items are ignored
         self.touchable = set()
-        if kind == "devices":
-            self.containers = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in scene.DEVICES)}
+        if stations:
+            names = scene.LAB if kind == "lab" else scene.DEVICES
+            self.containers = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in names)}
             self.touchable = set(self.containers)        # in a contact stage the gripper may touch devices (it presses them)
-        self.items = set() if kind == "devices" else {scene.item_body(m, n) for n in scene.ITEMS}
-        for n in ([] if kind == "devices" else scene.ITEMS):   # items: no collisions, parked apart
+        self.items = set() if stations else {scene.item_body(m, n) for n in scene.ITEMS}
+        for n in ([] if stations else scene.ITEMS):   # items: no collisions, parked apart
             b = scene.item_body(m, n)
             qa = m.jnt_qposadr[m.body_jntadr[b]]
             self.d.qpos[qa:qa + 3] = [-2.0, 0.3 * list(scene.ITEMS).index(n), -2.0]

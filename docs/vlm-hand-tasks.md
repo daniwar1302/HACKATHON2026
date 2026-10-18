@@ -59,6 +59,24 @@ hit = vlm_point.ground("the red cup") # {"found": [{"bbox_2d": [...], "point": [
 #   move_hand("left", x, y, z + 0.08); move_hand("left", x, y, z); gripper("left", "close"); move_hand("left", x, y, z + 0.10)
 ```
 
+## Skills: one call each (2026-10-17)
+
+Faster for an onboard VLA than chaining `move_hand` / `gripper`: every call is planned, collision-checked and
+verified, and returns a compact result.
+
+| Intent | Tool |
+|---|---|
+| pick the object at a point / in a VLM bbox | `pick(u, v)` or `pick(box=[u1, v1, u2, v2], scale="norm1000")` (depth gives size, height, grip axis, rings) |
+| put it in a container | `place(side, container="tray")` (stations: `register_container` once) or `place(side, u, v)` at an open spot |
+| arms out of the way | `home("both")` |
+| operate a known device | `list_controls`, `run_task("power_cycle_router" / "enter_bootloader" / "start_cycle" / "arm_stop" / "stop_machine")`, or one control with a phase (tap, press, release, hover, poke, rest) |
+| check a light / LED / lamp | `read_light([[u, v], ...])` -> on, colour (~50 ms) |
+| read a 7-segment code | `read_display(box)` |
+| read a dial | `register_gauge(name, box, min, max, ...)` once, then `read_gauge(name)` -> value, alarm |
+| proof of what happened | `receipts(last)`, `show_receipt(id)` (before/after head-camera frames for every action) |
+
+Pattern for agents: act -> sense -> confirm. "Pressed" is not done; "LED went green" is.
+
 ## A precise grasp, step by step
 
 1. `set_table(z)`: measure once (`point_to_xyz` on the table surface, take z), so no move goes through it.

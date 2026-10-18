@@ -102,7 +102,9 @@ def _mesh_bottom(model_dir: str) -> float:
     return float(zmin)
 
 
-def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINERS, devices: bool = False) -> mujoco.MjModel:
+def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINERS, devices: bool | str = False) -> mujoco.MjModel:
+    """devices: False, True / "devices" (IT desk: power strip, router, key, button, light) or "lab" (dev board,
+    machine panel with stack light, pressure gauge)."""
     spec = mujoco.MjSpec.from_file(str(URDF))
     spec.meshdir = str(URDF.parent)
     spec.compiler.fusestatic = False
@@ -170,7 +172,11 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             wb.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=[lx + sx, ly + sy, (desk.top_z - 0.03 + FLOOR_Z) / 2],
                         size=[0.02, 0.02, (desk.top_z - 0.03 - FLOOR_Z) / 2], rgba=[0.45, 0.32, 0.2, 1])
 
-    if devices:
+    if devices == "lab":
+        add_lab(spec, desk)
+        for housing, part in LAB_PARTS:
+            spec.add_exclude(bodyname1=housing, bodyname2=part)
+    elif devices:
         add_devices(spec, desk)
         # moving parts sit inside their housings; parent/child contact filtering isn't active for this URDF-based
         # model, so without these the housing pushes the rocker/lever back to centre (switches lose their state)
@@ -257,6 +263,104 @@ def add_devices(spec, desk: "Desk"):
             lev.add_geom(name=f"{name}_lever_geom", type=box, size=[0.008, 0.009, 0.018], pos=[-0.006, 0, 0], rgba=[0.97, 0.97, 0.95, 1], mass=0.004)
             b.add_geom(name=f"{name}_lamp", type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[0.008, 0, 0], pos=[-0.002, 0, 0.075],
                        rgba=[0.25, 0.25, 0.2, 1], contype=0, conaffinity=0)   # the "light"
+
+
+# ---- lab: hardware-in-the-loop dev board + machine tending (start/stop, stack light, pressure gauge) ----
+LAB = {
+    "dev_board": ((0.31, 0.02), "dev carrier board: BOOT (blue cap, robot's left) and RESET (red cap, right) buttons "
+                  "13 cm apart, status LED (green app / red hung / blue bootloader), 4-digit display (pairing code)"),
+    "machine": ((0.33, -0.20), "machine control panel: START (green) and STOP (red) mushroom buttons"),
+    "stack_light": ((0.45, -0.22), "stack light: green running, yellow idle/done, red fault"),
+    "gauge": ((0.43, 0.20), "pressure gauge 0-10 bar facing the robot; normal run ~6 bar, over 8 bar press STOP"),
+}
+LAB_PARTS = [("dev_board", "dev_board_boot"), ("dev_board", "dev_board_reset"),
+             ("machine", "machine_start"), ("machine", "machine_stop")]
+SEG = {"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc", "5": "afgcd", "6": "afgedc", "7": "abc",
+       "8": "abcdefg", "9": "abcdfg", "-": "g", "b": "fgedc", "o": "gcde", "t": "fged", " ": ""}
+DIGIT_W, DIGIT_H = 0.013, 0.022     # one 7-segment digit on the board (y across, x up the image)
+
+
+def seg_layout():
+    """segment -> (centre (u right, v up) in digit units, is_horizontal). u maps to -y, v to +x on the desk."""
+    return {"a": ((0, 0.5), True), "b": ((0.5, 0.25), False), "c": ((0.5, -0.25), False), "d": ((0, -0.5), True),
+            "e": ((-0.5, -0.25), False), "f": ((-0.5, 0.25), False), "g": ((0, 0), True)}
+
+
+def gauge_frame(top):
+    """Dial centre and frame (columns x, y = 'up' on the face, z = face normal toward the head camera)."""
+    (x, y), _ = LAB["gauge"]
+    c = np.array([x, y, top + 0.075])
+    z = vision.pelvis_from_cam(np.eye(4))[:3, 3] - c      # face the head camera (waist straight)
+    z /= np.linalg.norm(z)
+    yv = np.array([0.0, 0.0, 1.0]) - z[2] * z
+    yv /= np.linalg.norm(yv)
+    return c, np.stack([np.cross(yv, z), yv, z], 1)
+
+
+def glow(spec):
+    """Indicators emit light (LEDs, lamps, digits): lit colours read the same from any side, like the real thing."""
+    spec.add_material(name="glow").emission = 0.9
+    return "glow"
+
+
+def add_lab(spec, desk: "Desk"):
+    wb, top = spec.worldbody, desk.top_z
+    g = glow(spec)
+    box, cyl = mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER
+    nocol = dict(contype=0, conaffinity=0)
+    # dev board: 7 x 20 cm PCB on standoffs
+    (x, y), _ = LAB["dev_board"]
+    b = wb.add_body(name="dev_board", pos=[x, y, top + 0.008])
+    b.add_geom(type=box, size=[0.035, 0.10, 0.008], rgba=[0.05, 0.35, 0.15, 1])
+    for name, dy, col in (("boot", 0.065, [0.15, 0.35, 0.95, 1]), ("reset", -0.065, [0.9, 0.15, 0.1, 1])):
+        b.add_geom(type=box, size=[0.012, 0.012, 0.003], pos=[0.0, dy, 0.011], rgba=[0.08, 0.08, 0.08, 1])
+        cap = b.add_body(name=f"dev_board_{name}", pos=[0.0, dy, 0.017])
+        cap.add_joint(name=f"dev_board_{name}", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[-0.003, 0],
+                      stiffness=300, damping=2, springref=0)
+        cap.add_geom(type=cyl, size=[0.008, 0.003, 0], rgba=col, mass=0.002)
+    b.add_geom(name="dev_board_led", type=box, size=[0.004, 0.004, 0.002], pos=[0.024, 0.0, 0.009], rgba=[0.04, 0.04, 0.04, 1], material=g, **nocol)
+    b.add_geom(type=box, size=[0.016, 0.034, 0.0006], pos=[-0.008, 0.0, 0.0085], rgba=[0.03, 0.03, 0.03, 1], **nocol)   # display window
+    for dgt in range(4):
+        cy = 0.0255 - dgt * 0.017                      # digit 0 is leftmost in the image (+y)
+        for sname, ((u, v), horiz) in seg_layout().items():
+            px, py = -0.008 + v * DIGIT_H, cy - u * DIGIT_W
+            size = [0.0012, DIGIT_W * 0.38, 0.0004] if horiz else [DIGIT_H * 0.2, 0.0012, 0.0004]
+            b.add_geom(name=f"dev_board_seg{dgt}{sname}", type=box, size=size, pos=[px, py, 0.0092], rgba=[0.05, 0.01, 0.01, 1], material=g, **nocol)
+    # machine panel with START / STOP mushrooms
+    (x, y), _ = LAB["machine"]
+    b = wb.add_body(name="machine", pos=[x, y, top + 0.02])
+    b.add_geom(type=box, size=[0.04, 0.07, 0.02], rgba=[0.55, 0.57, 0.6, 1])
+    for name, dy, col in (("start", 0.035, [0.1, 0.75, 0.2, 1]), ("stop", -0.035, [0.85, 0.1, 0.1, 1])):
+        cap = b.add_body(name=f"machine_{name}", pos=[0, dy, 0.026])
+        cap.add_joint(name=f"machine_{name}", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[-0.008, 0],
+                      stiffness=250, damping=3, springref=0)
+        cap.add_geom(type=cyl, size=[0.015, 0.006, 0], rgba=col, mass=0.01)
+    # stack light tower
+    (x, y), _ = LAB["stack_light"]
+    b = wb.add_body(name="stack_light", pos=[x, y, top])
+    b.add_geom(type=cyl, size=[0.025, 0.005, 0], pos=[0, 0, 0.005], rgba=[0.2, 0.2, 0.2, 1])
+    b.add_geom(type=cyl, size=[0.006, 0.04, 0], pos=[0, 0, 0.045], rgba=[0.6, 0.6, 0.6, 1])
+    for k, lamp in enumerate(("green", "yellow", "red")):
+        b.add_geom(name=f"stack_light_{lamp}", type=cyl, size=[0.017, 0.012, 0], pos=[0, 0, 0.097 + 0.025 * k], rgba=[0.04, 0.04, 0.04, 1], material=g)
+    # pressure gauge: dial on a stand, face turned toward the head camera
+    (x, y), _ = LAB["gauge"]
+    c, R = gauge_frame(top)
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, R.flatten())
+    st = wb.add_body(name="gauge", pos=[x, y, top])
+    st.add_geom(type=box, size=[0.012, 0.012, 0.035], pos=[0.01, 0, 0.035], rgba=[0.3, 0.3, 0.32, 1])
+    dial = st.add_body(name="gauge_dial", pos=[0, 0, 0.075], quat=quat)
+    dial.add_geom(type=cyl, size=[0.045, 0.004, 0], rgba=[0.15, 0.15, 0.15, 1])
+    dial.add_geom(type=cyl, size=[0.041, 0.0005, 0], pos=[0, 0, 0.0042], rgba=[0.97, 0.97, 0.95, 1], **nocol)
+    for k in range(11):                                  # ticks every bar, 0 at -135 deg (clockwise from up)
+        a = np.radians(-135 + 27 * k)
+        r = 0.034
+        dial.add_geom(type=box, size=[0.0008, 0.004 if k % 5 == 0 else 0.0025, 0.0003],
+                      pos=[r * np.sin(a), r * np.cos(a), 0.0048], euler=[0, 0, -a], rgba=[0.05, 0.05, 0.05, 1], **nocol)
+    nd = dial.add_body(name="gauge_needle", pos=[0, 0, 0.005])
+    nd.add_joint(name="gauge_needle", type=mujoco.mjtJoint.mjJNT_HINGE, axis=[0, 0, 1], damping=1.0, armature=0.001)
+    nd.add_geom(type=box, size=[0.0012, 0.015, 0.0004], pos=[0, 0.013, 0.0005], rgba=[0.9, 0.05, 0.05, 1], mass=0.001, **nocol)
+    nd.add_geom(type=cyl, size=[0.004, 0.0008, 0], rgba=[0.05, 0.05, 0.05, 1], mass=0.001, **nocol)
 
 
 DEVICE_PARTS = [("power_strip", "power_strip_rocker"), ("light_switch", "light_switch_lever"),
