@@ -16,16 +16,25 @@ def card(title, lines, n=30):
     for i, l in enumerate(lines):
         d.text((80, 320 + 46 * i), l, font=F(30), fill=(190, 200, 215))
     emit(im, n)
+def run_stats(name):
+    for line in open(f"{S}/vid_{name}/agent.log"):
+        d = json.loads(line.split("\t", 1)[1])
+        if d.get("type") == "result":
+            return f"Matches ground truth · {d.get('num_turns')} turns · {d.get('duration_ms', 0) / 1000:.0f} s · ${d.get('total_cost_usd', 0):.2f}"
+    return ""
 DEMOS = [
     ("it", "IT agent: \"the office internet is down\"",
      ["Claude Code + robot MCP tools, plain-English ticket", "find router -> read LEDs -> power-cycle -> verify"],
-     ["Router hung (internet LED amber) -> power-cycled -> both LEDs green", "Matches ground truth · 13 turns · 84 s · $0.27"]),
+     ["Router hung (internet LED amber) -> power-cycled -> both LEDs green"]),
+    ("rack", "SRE agent: datacenter remote hands",
+     ["Page: storage on db-07 degraded", "read the panel code + drive LEDs -> follow the runbook -> verify"],
+     ["Er42 -> reseated only the failed drive (no needless hard reset) -> all green"]),
     ("lab", "Coding agent: flash firmware on a real board",
      ["Hung board -> robot holds BOOT, taps RESET -> agent flashes v2 from its shell", "then a machine cycle guarded by an overpressure interlock"],
-     ["Firmware v2 running, code 0856 read off the display", "Faulty machine stopped by the guard at ~8 bar (trips at 9.5)", "Matches ground truth · 28 turns · 118 s · $0.41"]),
+     ["Firmware v2 running, pairing code read off the display", "Faulty machine stopped by the guard at ~8 bar (trips at 9.5)"]),
     ("cell", "Manufacturing agent: machine tending + QC",
      ["Load raw part -> START -> watch stack light -> read QC lamp", "-> unload to PASS or REJECT bin, 3 parts"],
-     ["3/3 parts machined and sorted correctly (pass, reject, pass)", "Matches ground truth · no faults"]),
+     ["3/3 parts machined and sorted correctly (pass, reject, pass)"]),
 ]
 card("Agents run real work cells", ["Unitree G1 arms as MCP skills · MuJoCo twin on the robot's real protocol",
                                     "Claude Code gets a work order and only the robot tools", "Everything below is unscripted: the agent decides every step"], 45)
@@ -64,7 +73,7 @@ for name, title, intro, outro in DEMOS:
             d.text((20, y), l, font=F(22), fill=(235, 238, 245)); y += 30
         d.text((20, 660), tool, font=F(20), fill=(90, 200, 230))
         emit(im)
-    card("Result", outro, 40)
+    card("Result", outro + [run_stats(name)], 40)
 card("What agents get", ["verified skills (pick, place, taught presses & transfers) · fast sensing (LEDs, displays, gauges)",
                          "background interlocks · receipts (before/after frames for every action)",
                          "teach a new cell by pointing or one demonstration · github.com/daniwar1302/HACKATHON2026"], 60)
