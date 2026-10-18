@@ -345,3 +345,10 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
 - Dancing: joint speed capped at 1 rad/s, comfort limits on every joint, a spoken 3-2-1 before the arms move, 10 minutes at most per dance, and every stop glides the arms back before handing them to the stock controller.
 - "Person within reach" shots and tests happen only with the arm parked or its motors off.
 - Waldo is shared: check with the bay owner before using the robot.
+
+## Team
+
+- [Daniela Guerra](https://www.linkedin.com/in/danielaguerram/)
+- [Ruth Guerra](https://www.linkedin.com/in/rguerram97/)
+- [Michael Loughran](https://www.linkedin.com/in/michaeleloughran/)
+- [Saahith Veeramaneni](https://www.linkedin.com/in/saahith-veeramaneni-960942272/)
