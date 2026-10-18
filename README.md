@@ -9,6 +9,9 @@ products with AI agents as their users, from MCP tools to communication infrastr
 that idea to robotics: agents can operate hardware, watch for problems, call a human for help,
 and remember what worked.
 
+> **Live from Mission Robotics, San Francisco.** We accessed the Unitree G1 remotely through
+> **Tailscale** and watched a live video stream from the lab while operating the robot.
+
 <!-- Official Inkbox mark and wordmark: https://inkbox.ai/ -->
 <table>
   <tr>
@@ -38,6 +41,35 @@ wrong, stop, phone the operator, talk it through live while the cameras keep wat
 ## Simulation videos
 
 Watch the G1 simulation examples as MP4s, with room and head-camera views plus captions from the agent’s reasoning and tool calls.
+
+Quick loops from the recorded MuJoCo runs. Click a GIF for the full demo highlights.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <strong>Machine tending</strong><br>
+      <a href="media/g1-demos/cell_highlights.mp4"><img src="media/g1-demos/gifs/cell.gif" alt="Simulated G1 loads a part into the machine" width="400"></a><br>
+      Load a part into the machine · 5× speed
+    </td>
+    <td align="center" width="50%">
+      <strong>Two-hand board recovery</strong><br>
+      <a href="media/g1-demos/lab_highlights.mp4"><img src="media/g1-demos/gifs/lab.gif" alt="Simulated G1 uses both hands to hold BOOT and press RESET" width="400"></a><br>
+      Hold BOOT, press RESET · 6× speed
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <strong>Tablet app testing</strong><br>
+      <a href="media/g1-demos/qa_highlights.mp4"><img src="media/g1-demos/gifs/qa.gif" alt="Simulated G1 taps checkout on a tablet" width="400"></a><br>
+      Tap through checkout with a fingertip · 4× speed
+    </td>
+    <td align="center" width="50%">
+      <strong>Warehouse returns</strong><br>
+      <a href="media/g1-demos/returns_highlights.mp4"><img src="media/g1-demos/gifs/returns.gif" alt="Simulated G1 moves a returned item to the restock bin" width="400"></a><br>
+      Move the scanned item to restock · 6× speed
+    </td>
+  </tr>
+</table>
 
 **[Watch all six examples — 2:02 highlights reel](media/g1-demos/all_highlights.mp4)**
 
