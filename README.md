@@ -348,7 +348,49 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
 
 ## Team
 
-- [Dani Guerra](https://www.linkedin.com/in/danielaguerram/)
-- [Ruth Guerra](https://www.linkedin.com/in/rguerram97/)
-- [Michael Loughran](https://www.linkedin.com/in/michaeleloughran/)
-- [Saahith Veeramaneni](https://www.linkedin.com/in/saahith-veeramaneni-960942272/)
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="https://www.linkedin.com/in/danielaguerram/"><img src="docs/assets/team/daniela.jpeg" width="120" height="120" alt="Dani Guerra"></a>
+      <h3><a href="https://www.linkedin.com/in/danielaguerram/">Dani Guerra</a></h3>
+      <p><strong>B.S. Mechanical Engineering</strong><br>UC Berkeley</p>
+      <p>System Reliability Engineer · Chef Robotics<br>Previously Process Engineer · Tesla</p>
+      <p>
+        <a href="https://www.chefrobotics.ai/"><img src="docs/assets/team/chef-robotics.jpeg" width="40" alt="Chef Robotics" title="Chef Robotics"></a>&nbsp;
+        <a href="https://www.tesla.com/"><img src="docs/assets/team/tesla.jpeg" width="40" alt="Tesla" title="Tesla"></a>&nbsp;
+      </p>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href="https://www.linkedin.com/in/rguerram97/"><img src="docs/assets/team/ruth.png" width="120" height="120" alt="Ruth Guerra"></a>
+      <h3><a href="https://www.linkedin.com/in/rguerram97/">Ruth Guerra</a></h3>
+      <p><strong>B.S. Industrial Engineering</strong><br>Purdue University</p>
+      <p>Previously Senior Mechanical Design Engineer · Tesla<br>Earlier engineering experience · General Motors</p>
+      <p>
+        <a href="https://www.tesla.com/"><img src="docs/assets/team/tesla.jpeg" width="40" alt="Tesla" title="Tesla"></a>&nbsp;
+        <a href="https://www.gm.com/"><img src="docs/assets/team/gm.svg" width="40" alt="General Motors" title="General Motors"></a>&nbsp;
+      </p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="https://www.linkedin.com/in/michaeleloughran/"><img src="docs/assets/team/michael.jpeg" width="120" height="120" alt="Michael Loughran"></a>
+      <h3><a href="https://www.linkedin.com/in/michaeleloughran/">Michael Loughran</a></h3>
+      <p><strong>MEng studies · Electrical &amp; Electronic Engineering</strong><br>Queen’s University Belfast</p>
+      <p>Previously AMD<br>Embedded software &amp; hardware engineering internships</p>
+      <p>
+        <a href="https://www.amd.com/"><img src="docs/assets/team/amd.svg" width="88" alt="AMD" title="AMD"></a>&nbsp;
+      </p>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href="https://www.linkedin.com/in/saahith-veeramaneni-960942272/"><img src="docs/assets/team/saahith.png" width="120" height="120" alt="Saahith Veeramaneni"></a>
+      <h3><a href="https://www.linkedin.com/in/saahith-veeramaneni-960942272/">Saahith Veeramaneni</a></h3>
+      <p><strong>B.S. Computational Science · expected 2029</strong><br>UC Santa Cruz</p>
+      <p>Systems Engineer · Slugbotics<br>Previously Production Engineer Fellow · Meta &amp; MLH</p>
+      <p>
+        <a href="https://www.slugbotics.com/"><img src="docs/assets/team/slugbotics.svg" width="40" alt="Slugbotics" title="Slugbotics"></a>&nbsp;
+        <a href="https://about.meta.com/"><img src="docs/assets/team/meta.svg" width="40" alt="Meta" title="Meta"></a>&nbsp;
+        <a href="https://mlh.io/"><img src="docs/assets/team/mlh.svg" width="76" alt="Major League Hacking" title="Major League Hacking"></a>&nbsp;
+      </p>
+    </td>
+  </tr>
+</table>
