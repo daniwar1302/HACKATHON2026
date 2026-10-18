@@ -349,6 +349,7 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
 ## Team
 
 <table>
+  <tbody>
   <tr>
     <td width="50%" align="center" valign="top">
       <a href="https://www.linkedin.com/in/danielaguerram/"><img src="docs/assets/team/daniela.jpeg" width="120" height="120" alt="Dani Guerra"></a>
@@ -371,6 +372,8 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
       </p>
     </td>
   </tr>
+  </tbody>
+  <tbody>
   <tr>
     <td width="50%" align="center" valign="top">
       <a href="https://www.linkedin.com/in/michaeleloughran/"><img src="docs/assets/team/michael.jpeg" width="120" height="120" alt="Michael Loughran"></a>
@@ -393,4 +396,5 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
       </p>
     </td>
   </tr>
+  </tbody>
 </table>
