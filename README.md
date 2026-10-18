@@ -378,7 +378,7 @@ Closing the SSH session also cuts off the camera stream. If you can't connect, c
     <td width="50%" align="center" valign="top">
       <a href="https://www.linkedin.com/in/michaeleloughran/"><img src="docs/assets/team/michael.jpeg" width="120" height="120" alt="Michael Loughran"></a>
       <h3><a href="https://www.linkedin.com/in/michaeleloughran/">Michael Loughran</a></h3>
-      <p><strong>MEng studies · Electrical &amp; Electronic Engineering</strong><br>Queen’s University Belfast</p>
+      <p><strong>BEng · Electrical &amp; Electronic Engineering</strong><br>Queen’s University Belfast</p>
       <p>Previously AMD<br>Embedded software &amp; hardware engineering internships</p>
       <p>
         <a href="https://www.amd.com/"><img src="docs/assets/team/amd.svg" width="88" alt="AMD" title="AMD"></a>&nbsp;
