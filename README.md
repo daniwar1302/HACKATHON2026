@@ -9,8 +9,8 @@ products with AI agents as their users, from MCP tools to communication infrastr
 that idea to robotics: agents can operate hardware, watch for problems, call a human for help,
 and remember what worked.
 
-> **Live from Mission Robotics, San Francisco.** We accessed the Unitree G1 remotely through
-> **Tailscale** and watched a live video stream from the lab while operating the robot.
+> **Live from [Mission Robotics](https://missionrobotics.ai/), San Francisco.** We accessed the [Unitree G1](https://www.unitree.com/g1/) remotely through
+> **[Tailscale](https://tailscale.com/)** and watched a live video stream from the lab while operating the robot.
 
 <!-- Official Inkbox mark and wordmark: https://inkbox.ai/ -->
 <table>
@@ -33,10 +33,6 @@ and remember what worked.
 
 **Waldo gives an AI agent eyes that react in a tenth of a second, a phone number to call you when it's unsure,
 and a memory so it needs you less each time.**
-
-Waldo is a lab workstation driving robot hardware: WidowX AI arms (Trossen) and a Unitree G1 humanoid. This repo
-lets a Claude agent run physical tasks like "lift the red cup", notice within about a second when something goes
-wrong, stop, phone the operator, talk it through live while the cameras keep watching, and remember the answer.
 
 ## Simulation videos
 
