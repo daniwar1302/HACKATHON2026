@@ -40,6 +40,12 @@ teach_control("router_off", u, v, push="down", depth_mm=6, indicator=[u_led, v_l
 * Multi-step tasks (power cycle, bootloader) are the taught controls in order: `run_task` with phases (`press` to
   hold BOOT, `tap` RESET with the other hand, `release`). Save the sequences you need in `teach.py`'s task tables.
 
+## 2b. Fixtured pick/place (machine tending, kitting)
+In the sim, transfers between fixed places (infeed pocket → machine nest → pass/reject bin) are taught once and
+replayed (15/15 vs 2/9 for free pick/place). On the real cell, teach them supervised: `pick(u, v)` → `place(...,
+container=...)` → `home`, watched, slow (`G1_JOINT_SPEED`); a tool that records a watched success as a transfer, like
+`save_control`, is the next step (not built yet). Always start tasks from `home("both")`.
+
 ## 3. Register what the agent will read and fill
 * Containers: `register_container("tray", u, v, rim_z=...)` (point at the open spot to drop into; give `rim_z` if a
   tall wall is outside the image).

@@ -259,9 +259,20 @@ class Planner:
                     break   # best pitch for this jaw found
         return sorted(out, key=lambda g: g.cost)
 
-    def execute(self, g: Grasp, lift=0.13):
+    # Dex1: gap 6-95 mm over motor angle 0-5.4 (sim; check on the real gripper: it's a calibration knob)
+    GAP_MM, Q_MAX = (6.0, 95.0), 5.4
+
+    def open_for(self, side, width_m, margin=0.025):
+        """Open just wider than the item (+margin): fully open fingers straddle the walls of a tight fixture/nest."""
+        lo, hi = self.GAP_MM
+        q = (width_m * 1000 + margin * 1000 - lo) / (hi - lo) * self.Q_MAX
+        self.arm("gripper", side=side, q=float(min(5.0, max(1.0, q))))
+
+    def execute(self, g: Grasp, lift=0.13, width_m=None):
         side = g.side
         self.arm("enable")
+        if width_m:
+            self.open_for(side, width_m)
         other = "right" if side == "left" else "left"
         po = self.hand(other)
         if po[0] > 0.15 and po[2] > self.desk - 0.02:      # the other hand is parked over the desk: send it to rest
@@ -283,7 +294,8 @@ class Planner:
             raise PlanError(f"grasp: nothing held after lifting (gap {st.get('gap_mm')} mm)")
         return st
 
-    def pick_item(self, xyz, jaw_deg=0.0, height_m=0.02, prefer_side=None, thin=None, round_item=False, rim_radius_m=None):
+    def pick_item(self, xyz, jaw_deg=0.0, height_m=0.02, prefer_side=None, thin=None, round_item=False, rim_radius_m=None,
+                  width_m=None):
         """Pick an item centred at xyz (pelvis frame). jaw_deg = direction the jaws close (across the item).
         rim_radius_m: pinch the wall of a ring (tape roll) at that radius instead of grabbing across it."""
         xyz = np.asarray(xyz, float)
@@ -307,7 +319,7 @@ class Planner:
                 continue
             for g in cands[:self.TRIES_PER_SIDE]:
                 try:
-                    st = self.execute(g)
+                    st = self.execute(g, width_m=None if rim_radius_m else width_m)
                     self.held[side] = (xyz - g.grip, g.grip[2] - (xyz[2] - height_m / 2))
                     return {"side": side, "jaw_deg": round(g.jaw, 1), "pitch_deg": g.pitch, "gripper": st,
                             "attempts": attempts + [f"{side} jaw {g.jaw:.0f} pitch {g.pitch}: ok"]}

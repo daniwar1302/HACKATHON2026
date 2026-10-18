@@ -125,6 +125,9 @@ def play(arm, name, taught, phase="tap"):
     poke (press and let go from the hover: a fast stop), rest (from the hover back to rest). Segments: A approach,
     P press in, W dwell, p press out, a approach back. Missing preconditions are fixed first (poke from rest hovers)."""
     t = taught[name]
+    if "log" in t:                                       # a taught transfer: replay its exact commands
+        replay(arm, t["log"])
+        return
     side = t["side"]
     sl = slice(0, 7) if side == "left" else slice(7, 14)
     approach, press = np.array(t["approach"], float), np.array(t["press"], float)
@@ -157,6 +160,80 @@ def play(arm, name, taught, phase="tap"):
             go(approach[::-1])
 
 
+# ---- taught transfers (fixtured cell): pick/place moves found by the planner, verified in the sim, replayed exactly ----
+def replay(arm, log):
+    """Send a recorded command log. The first trajectory starts where teaching started; get there first."""
+    for cmd, kw in log:
+        if cmd == "trajectory":
+            q_now = np.array(arm("state")["arm"]["q"], float)
+            q0 = np.array(kw["q"][0], float)
+            if np.abs(q_now - q0).max() > 0.05:
+                send(arm, kw.get("side", "left"), [q_now, q0])
+        arm(cmd, **kw)
+
+
+def teach_transfers(arm, path, tries=6):
+    """Cell: load_slot{k} (infeed pocket k -> nest, then rest) and unload_pass / unload_reject (nest -> bin, rest).
+    Each: plan with the cell twin (fixture parts as obstacles), run it in the sim from a snapshot, keep the first whose
+    part really ends where it should, record its commands."""
+    import scene
+    from rehearse import Recorder
+    p = Planner(arm, arm("sim_objects")["desk_top_z"], scene_kind="cell")
+    cont = arm("sim_objects")["containers"]
+    taught = json.loads(path.read_text()) if path.exists() else {}
+    arm("sim_reset", seed=0)
+    arm("enable")
+    for sd in ("left", "right"):
+        p.home(sd)
+    arm("sim_save", name="cell_rest")
+
+    def attempt(name, fn, ok, side):
+        rec = Recorder(arm)
+        p.arm, p.R, p.held = rec, {"left": None, "right": None}, {}
+        try:
+            fn(side)
+            good = ok()
+        except PlanError as e:
+            good, rec.why = False, str(e)[:90]
+        p.arm = arm
+        return good, rec
+
+    def search(name, fn, ok, start):
+        t0 = time.time()
+        for k in range(tries):
+            arm("sim_restore", name=start)
+            good, rec = attempt(name, fn, ok, [None, "left", "right"][k % 3])
+            if good:
+                taught[name] = {"log": rec.log, "side": next((kw.get("side") for c, kw in rec.log if kw.get("side")), "left")}
+                print(f"{name:16s} TAUGHT  {len(rec.log)} commands  (try {k + 1}, {time.time() - t0:.0f} s)", flush=True)
+                return True
+            print(f"   {name} try {k + 1}: {getattr(rec, 'why', 'did not verify')}", flush=True)
+        print(f"{name:16s} FAILED", flush=True)
+        return False
+
+    in_nest = lambda part: (lambda: arm("sim_devices")["state"]["part_in_nest"] == part)
+    for k, part in enumerate(("part0", "part1", "part2")):
+        def load(side, part=part):
+            o = arm("sim_objects")["objects"][part]
+            r = p.pick_item(np.array(o["xyz"]), 0.0, height_m=o["height_mm"] / 1000, prefer_side=side, round_item=True,
+                            width_m=o["width_mm"] / 1000)
+            p.place(r["side"], cont["nest"]["box_min"], cont["nest"]["box_max"], at=cont["nest"]["drop_xy"])
+            p.home(r["side"])
+        if search(f"load_slot{k}", load, in_nest(part), "cell_rest") and k == 0:
+            arm("sim_save", name="cell_loaded")          # part0 sits in the nest: teach the unloads from here
+    for verdict in ("pass", "reject"):
+        def unload(side, verdict=verdict):
+            o = arm("sim_objects")["objects"]["part0"]
+            r = p.pick_item(np.array(o["xyz"]), 0.0, height_m=o["height_mm"] / 1000, prefer_side=side, round_item=True,
+                            width_m=o["width_mm"] / 1000)
+            b = cont[f"{verdict}_bin"]
+            p.place(r["side"], b["box_min"], b["box_max"], at=b["drop_xy"])
+            p.home(r["side"])
+        search(f"unload_{verdict}", unload, lambda v=verdict: arm("sim_objects")["objects"]["part0"]["in_container"] == f"{v}_bin",
+               "cell_loaded")
+    path.write_text(json.dumps(taught))
+
+
 TASKS = {   # what an agent asks for -> taught controls (+ wait after, + phase)
     "power_cycle_router": [("power_strip_off_end", 5.0), ("power_strip_on_end", 4.0)],
     "approve_2fa": [("security_key_pad", 0.0)],
@@ -171,7 +248,10 @@ LAB_TASKS = {
     "arm_stop": [("machine_stop", 0.0, "hover")],         # park a fingertip over STOP while watching the gauge
     "disarm_stop": [("machine_stop", 0.0, "rest")],
 }
-SCENES = {"devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json")}
+CELL_CONTROLS = {k: LAB_CONTROLS[k] for k in ("machine_start", "machine_stop")}
+CELL_TASKS = {k: LAB_TASKS[k] for k in ("start_cycle", "stop_machine", "arm_stop", "disarm_stop")}
+SCENES = {"devices": (CONTROLS, TASKS, HERE / "taught.json"), "lab": (LAB_CONTROLS, LAB_TASKS, HERE / "taught_lab.json"),
+          "cell": (CELL_CONTROLS, CELL_TASKS, HERE / "taught_cell.json")}
 ALL_TASKS = {**TASKS, **LAB_TASKS}
 
 
@@ -212,7 +292,10 @@ def main():
     twin.PAD = 0.002          # the sim validates every candidate; plan with a small pad
     p = Planner(arm, arm("sim_objects")["desk_top_z"], twin=False)
     if a.mode == "teach":
-        teach(arm, twin, p, controls, path, [a.task] if a.task else None)
+        if kind == "cell" and a.task in (None, "transfers"):
+            teach_transfers(arm, path)
+        if a.task != "transfers":
+            teach(arm, twin, p, controls, path, [a.task] if a.task else None)
         return
     taught = json.loads(path.read_text())
     tasks = [a.task] if a.task else list(tasks_all)

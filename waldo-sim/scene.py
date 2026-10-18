@@ -102,7 +102,8 @@ def _mesh_bottom(model_dir: str) -> float:
     return float(zmin)
 
 
-def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINERS, devices: bool | str = False) -> mujoco.MjModel:
+def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINERS, devices: bool | str = False,
+          twin: bool = False) -> mujoco.MjModel:
     """devices: False, True / "devices" (IT desk: power strip, router, key, button, light) or "lab" (dev board,
     machine panel with stack light, pressure gauge)."""
     spec = mujoco.MjSpec.from_file(str(URDF))
@@ -172,7 +173,11 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             wb.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=[lx + sx, ly + sy, (desk.top_z - 0.03 + FLOOR_Z) / 2],
                         size=[0.02, 0.02, (desk.top_z - 0.03 - FLOOR_Z) / 2], rgba=[0.45, 0.32, 0.2, 1])
 
-    if devices == "lab":
+    if devices == "cell":
+        add_cell(spec, desk, twin)
+        for housing, part in CELL_PARTS_BODIES:
+            spec.add_exclude(bodyname1=housing, bodyname2=part)
+    elif devices == "lab":
         add_lab(spec, desk)
         for housing, part in LAB_PARTS:
             spec.add_exclude(bodyname1=housing, bodyname2=part)
@@ -198,7 +203,7 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             # long items lie along x; capsule/cylinder axis is z by default, so rotate onto the desk
             quat = [math.cos(math.pi / 4), 0, math.sin(math.pi / 4), 0] if kind in ("capsule", "cylinder") else [1, 0, 0, 0]
             gtype = {"capsule": mujoco.mjtGeom.mjGEOM_CAPSULE, "cylinder": mujoco.mjtGeom.mjGEOM_CYLINDER,
-                     "box": mujoco.mjtGeom.mjGEOM_BOX}[kind]
+                     "upright": mujoco.mjtGeom.mjGEOM_CYLINDER, "box": mujoco.mjtGeom.mjGEOM_BOX}[kind]
             body.add_geom(name=f"{name}_geom", type=gtype, size=list(p) + [0] * (3 - len(p)), quat=quat, rgba=list(rgba),
                           mass=mass, friction=[0.9, 0.01, 0.001], condim=4)
     return spec.compile()
@@ -303,6 +308,75 @@ def glow(spec):
     return "glow"
 
 
+def machine_panel(wb, xy, top, qc_material=None):
+    """Grey control panel with START (green) / STOP (red) mushroom buttons; optional QC result lamp."""
+    box, cyl = mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER
+    b = wb.add_body(name="machine", pos=[xy[0], xy[1], top + 0.02])
+    b.add_geom(type=box, size=[0.04, 0.07, 0.02], rgba=[0.55, 0.57, 0.6, 1])
+    for name, dy, col in (("start", 0.035, [0.1, 0.75, 0.2, 1]), ("stop", -0.035, [0.85, 0.1, 0.1, 1])):
+        cap = b.add_body(name=f"machine_{name}", pos=[0, dy, 0.026])
+        cap.add_joint(name=f"machine_{name}", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[-0.008, 0],
+                      stiffness=250, damping=3, springref=0)
+        cap.add_geom(type=cyl, size=[0.015, 0.006, 0], rgba=col, mass=0.01)
+    if qc_material:              # QC lamp at the far edge, between the buttons: green pass / red reject
+        b.add_geom(name="qc_light", type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[0.009, 0, 0], pos=[0.03, 0, 0.022],
+                   rgba=[0.04, 0.04, 0.04, 1], material=qc_material, contype=0, conaffinity=0)
+
+
+def stack_light(wb, xy, top, material):
+    cyl = mujoco.mjtGeom.mjGEOM_CYLINDER
+    b = wb.add_body(name="stack_light", pos=[xy[0], xy[1], top])
+    b.add_geom(type=cyl, size=[0.025, 0.005, 0], pos=[0, 0, 0.005], rgba=[0.2, 0.2, 0.2, 1])
+    b.add_geom(type=cyl, size=[0.006, 0.04, 0], pos=[0, 0, 0.045], rgba=[0.6, 0.6, 0.6, 1])
+    for k, lamp in enumerate(("green", "yellow", "red")):
+        b.add_geom(name=f"stack_light_{lamp}", type=cyl, size=[0.017, 0.012, 0], pos=[0, 0, 0.097 + 0.025 * k],
+                   rgba=[0.04, 0.04, 0.04, 1], material=material)
+
+
+# ---- cell: machine tending + QC, the industrial pick-and-place (fixtured parts, not desk clutter) ----
+CELL = {
+    "infeed": ((0.30, 0.17), "infeed fixture: raw parts stand in 3 pockets"),
+    "nest": ((0.32, -0.02), "machine fixture: load one part here, press START"),
+    "machine": ((0.33, -0.20), "machine panel: START / STOP, QC lamp (green pass, red reject) after each cycle"),
+    "stack_light": ((0.45, -0.22), "stack light: green running, yellow idle/done, red fault"),
+    "pass_bin": ((0.45, 0.17), "outfeed: good parts"),
+    "reject_bin": ((0.46, -0.06), "outfeed: rejected parts"),
+}
+INFEED_SLOTS = [(0.29, 0.13), (0.29, 0.20), (0.345, 0.165)]
+PART_RAW, PART_DONE = (0.45, 0.45, 0.48, 1), (0.85, 0.87, 0.9, 1)
+CELL_PARTS = {f"part{k}": ("upright", (0.012, 0.025), 0.06, PART_RAW, "part") for k in range(3)}
+CELL_PARTS_BODIES = [("machine", "machine_start"), ("machine", "machine_stop")]
+
+
+def _tray(wb, name, xy, top, inner, wall_h, rgba, floor=0.004):
+    """Open box (bin / nest pocket): floor plate + four walls, inner size `inner` (m)."""
+    box = mujoco.mjtGeom.mjGEOM_BOX
+    b = wb.add_body(name=name, pos=[xy[0], xy[1], top])
+    t, h = 0.004, inner / 2
+    b.add_geom(type=box, size=[h + t, h + t, floor / 2], pos=[0, 0, floor / 2], rgba=rgba)
+    for dx, dy, sx, sy in ((h + t / 2, 0, t / 2, h + t), (-h - t / 2, 0, t / 2, h + t), (0, h + t / 2, h, t / 2), (0, -h - t / 2, h, t / 2)):
+        b.add_geom(type=box, size=[sx, sy, wall_h / 2], pos=[dx, dy, floor + wall_h / 2], rgba=rgba)
+
+
+def add_cell(spec, desk: "Desk", twin: bool = False):
+    """twin: the planner's copy also gets the fixtured parts as obstacles (their slots are known; a slot emptied by a
+    pick stays an obstacle, which is only conservative)."""
+    wb, top = spec.worldbody, desk.top_z
+    g = glow(spec)
+    box = mujoco.mjtGeom.mjGEOM_BOX
+    (ix, iy), _ = CELL["infeed"]
+    inf = wb.add_body(name="infeed", pos=[ix, iy, top])
+    inf.add_geom(type=box, size=[0.05, 0.075, 0.003], pos=[0.015, -0.005, 0.003], rgba=[0.2, 0.25, 0.35, 1])
+    if twin:
+        for x, y in INFEED_SLOTS:
+            inf.add_geom(type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.013, 0.025, 0], pos=[x - ix, y - iy, 0.006 + 0.025])
+    _tray(wb, "nest", CELL["nest"][0], top, 0.040, 0.008, [0.25, 0.27, 0.3, 1], floor=0.010)
+    _tray(wb, "pass_bin", CELL["pass_bin"][0], top, 0.09, 0.045, [0.15, 0.5, 0.25, 1])
+    _tray(wb, "reject_bin", CELL["reject_bin"][0], top, 0.09, 0.045, [0.65, 0.18, 0.15, 1])
+    machine_panel(wb, CELL["machine"][0], top, qc_material=g)
+    stack_light(wb, CELL["stack_light"][0], top, g)
+
+
 def add_lab(spec, desk: "Desk"):
     wb, top = spec.worldbody, desk.top_z
     g = glow(spec)
@@ -326,22 +400,8 @@ def add_lab(spec, desk: "Desk"):
             px, py = -0.008 + v * DIGIT_H, cy - u * DIGIT_W
             size = [0.0012, DIGIT_W * 0.38, 0.0004] if horiz else [DIGIT_H * 0.2, 0.0012, 0.0004]
             b.add_geom(name=f"dev_board_seg{dgt}{sname}", type=box, size=size, pos=[px, py, 0.0092], rgba=[0.05, 0.01, 0.01, 1], material=g, **nocol)
-    # machine panel with START / STOP mushrooms
-    (x, y), _ = LAB["machine"]
-    b = wb.add_body(name="machine", pos=[x, y, top + 0.02])
-    b.add_geom(type=box, size=[0.04, 0.07, 0.02], rgba=[0.55, 0.57, 0.6, 1])
-    for name, dy, col in (("start", 0.035, [0.1, 0.75, 0.2, 1]), ("stop", -0.035, [0.85, 0.1, 0.1, 1])):
-        cap = b.add_body(name=f"machine_{name}", pos=[0, dy, 0.026])
-        cap.add_joint(name=f"machine_{name}", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[-0.008, 0],
-                      stiffness=250, damping=3, springref=0)
-        cap.add_geom(type=cyl, size=[0.015, 0.006, 0], rgba=col, mass=0.01)
-    # stack light tower
-    (x, y), _ = LAB["stack_light"]
-    b = wb.add_body(name="stack_light", pos=[x, y, top])
-    b.add_geom(type=cyl, size=[0.025, 0.005, 0], pos=[0, 0, 0.005], rgba=[0.2, 0.2, 0.2, 1])
-    b.add_geom(type=cyl, size=[0.006, 0.04, 0], pos=[0, 0, 0.045], rgba=[0.6, 0.6, 0.6, 1])
-    for k, lamp in enumerate(("green", "yellow", "red")):
-        b.add_geom(name=f"stack_light_{lamp}", type=cyl, size=[0.017, 0.012, 0], pos=[0, 0, 0.097 + 0.025 * k], rgba=[0.04, 0.04, 0.04, 1], material=g)
+    machine_panel(wb, LAB["machine"][0], top)
+    stack_light(wb, LAB["stack_light"][0], top, g)
     # pressure gauge: dial on a stand, face turned toward the head camera
     (x, y), _ = LAB["gauge"]
     c, R = gauge_frame(top)

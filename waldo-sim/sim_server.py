@@ -245,10 +245,110 @@ class LabDevices:
                 "machine_stop": {"point": top("machine_stop", 0.006), "push": [0, 0, -1]}}
 
 
+class CellDevices:
+    """Machine-tending cell: START only runs with a part in the nest; a cycle finishes the part (raw grey -> bright)
+    and the QC lamp shows PASS (green) or REJECT (red) while it sits in the nest. Pulling a part mid-cycle faults.
+    One part per seed is out of tolerance (part{seed % 3})."""
+    OFF, GREEN, RED, YELLOW = LabDevices.OFF, LabDevices.GREEN, LabDevices.RED, LabDevices.YELLOW
+    CYCLE_S = 8.0
+
+    def __init__(self, m, d, items):
+        self.m, self.d, self.items = m, d, items
+        self.q = {k: m.joint(k).qposadr[0] for k in ("machine_start", "machine_stop")}
+        self.g = {"qc": m.geom("qc_light").id, **{l: m.geom(f"stack_light_{l}").id for l in ("green", "yellow", "red")},
+                  **{n: m.geom(f"{n}_geom").id for n in items}}
+        self.nest = m.body("nest").id
+        self.bodies = {b for b in range(m.nbody) if m.body(b).name in ("machine", "machine_start", "machine_stop", "stack_light", "infeed")}
+        self.seed = 0
+        self.reset()
+
+    def reset(self):
+        for a in self.q.values():
+            self.d.qpos[a] = 0.0
+        self.history, self.presses = [], {k: 0 for k in self.q}
+        self._pressed = {k: False for k in self.q}
+        self.machine, self.t0, self.part, self.qc = "idle", 0.0, None, None
+        self.bad = f"part{self.seed % 3}"
+        self.done = {}                                   # part -> "pass" / "reject"
+        self.shown = None
+        for n in self.items:
+            self.m.geom_rgba[self.g[n]] = scene.PART_RAW
+        self.state = self.read()
+
+    def in_nest(self):
+        c = self.d.xpos[self.nest]
+        for n, b in self.items.items():
+            p = self.d.xpos[b]
+            if np.hypot(*(p[:2] - c[:2])) < 0.016 and p[2] < c[2] + 0.045:
+                return n
+        return None
+
+    def read(self):
+        return {"machine": self.machine, "part_in_nest": self.in_nest(), "qc": self.qc, "done": dict(self.done)}
+
+    def update(self):
+        d, t = self.d, self.d.time
+        for k, a in self.q.items():
+            down = d.qpos[a] < -0.005
+            if down and not self._pressed[k]:
+                self.presses[k] += 1
+                self.history.append((round(t, 2), f"{k} pressed"))
+                self._on_press(k, t)
+            self._pressed[k] = down
+        nest = self.in_nest()
+        if self.machine == "running":
+            if nest != self.part:
+                self.machine = "fault"
+                self.history.append((round(t, 2), "machine FAULT: part moved during the cycle"))
+            elif t - self.t0 >= self.CYCLE_S:
+                self.machine, self.qc = "done", "reject" if self.part == self.bad else "pass"
+                self.done[self.part] = self.qc
+                self.m.geom_rgba[self.g[self.part]] = scene.PART_DONE
+                self.history.append((round(t, 2), f"cycle complete: {self.part} QC {self.qc.upper()}"))
+        if self.qc and nest is None:
+            self.qc = None                               # lamp shows the result of the part in the nest only
+        self.state = self.read()
+        self._paint()
+
+    def _on_press(self, k, t):
+        nest = self.in_nest()
+        if k == "machine_start" and self.machine in ("idle", "done", "stopped"):
+            if nest is None:
+                self.history.append((round(t, 2), "START ignored: nest empty"))
+            elif nest in self.done:
+                self.history.append((round(t, 2), f"START ignored: {nest} already machined"))
+            else:
+                self.machine, self.t0, self.part, self.qc = "running", t, nest, None
+                self.history.append((round(t, 2), f"machine running {nest}"))
+        elif k == "machine_stop" and self.machine == "running":
+            self.machine = "stopped"
+            self.history.append((round(t, 2), "machine stopped by operator"))
+
+    def _paint(self):
+        key = (self.machine, self.qc)
+        if key == self.shown:
+            return
+        self.shown = key
+        rgba = self.m.geom_rgba
+        rgba[self.g["qc"]] = {"pass": self.GREEN, "reject": self.RED}.get(self.qc, self.OFF)
+        lamp = {"running": "green", "fault": "red"}.get(self.machine, "yellow")
+        for l in ("green", "yellow", "red"):
+            rgba[self.g[l]] = {"green": self.GREEN, "yellow": self.YELLOW, "red": self.RED}[l] if l == lamp else self.OFF
+
+    def targets(self):
+        m, d = self.m, self.d
+        def top(body):
+            b = m.body(body).id
+            return (d.xpos[b] + d.xmat[b].reshape(3, 3) @ np.array([0, 0, 0.006])).round(4).tolist()
+        return {k: {"point": top(k), "push": [0, 0, -1]} for k in ("machine_start", "machine_stop")}
+
+
 class Sim:
     def __init__(self, speed: float, desk: scene.Desk, item_set: str = "big", kind: str = "sort"):
         self.desk, self.item_set, self.kind = desk, item_set, kind
-        self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab") else scene.build(desk))
+        self.item_defs = scene.CELL_PARTS if kind == "cell" else scene.ITEMS
+        self.m = (scene.build(desk, items={}, containers={}, devices=kind) if kind in ("devices", "lab") else
+                  scene.build(desk, items=scene.CELL_PARTS, containers={}, devices="cell") if kind == "cell" else scene.build(desk))
         self.d = mujoco.MjData(self.m)
         self.speed = speed
         m = self.m
@@ -262,11 +362,13 @@ class Sim:
         self.site = {s: m.site(f"{s}_grasp").id for s in SIDES}
         self.arm_bodies = {s: {b for b in range(m.nbody) if m.body(b).name.startswith(s) and any(
             k in m.body(b).name for k in ("shoulder", "elbow", "wrist", "dex1"))} for s in SIDES}
-        self.items = {} if kind in ("devices", "lab") else {n: scene.item_body(m, n) for n in scene.ITEMS}
-        self.dev = Devices(m, self.d) if kind == "devices" else LabDevices(m, self.d) if kind == "lab" else None
+        self.items = {} if kind in ("devices", "lab") else {n: scene.item_body(m, n) for n in self.item_defs}
+        self.dev = (Devices(m, self.d) if kind == "devices" else LabDevices(m, self.d) if kind == "lab" else
+                    CellDevices(m, self.d, self.items) if kind == "cell" else None)
         self.item_qadr = {n: m.jnt_qposadr[m.body_jntadr[b]] for n, b in self.items.items()}
         self.item_dadr = {n: m.jnt_dofadr[m.body_jntadr[b]] for n, b in self.items.items()}
-        self.containers = {} if kind in ("devices", "lab") else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS}
+        self.containers = ({} if kind in ("devices", "lab") else {n: m.body(n).id for n in ("nest", "pass_bin", "reject_bin")}
+                           if kind == "cell" else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS})
         self.static_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] == 0 or m.geom_bodyid[g] in self.containers.values()}
         mujoco.mj_forward(m, self.d)
         self.box = {n: self._aabb(b) for n, b in self.containers.items()}
@@ -286,6 +388,10 @@ class Sim:
             if self.m.geom_bodyid[g] == body and self.m.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH and self.m.geom_group[g] == 3:
                 mid = self.m.geom_dataid[g]
                 v = self.m.mesh_vert[self.m.mesh_vertadr[mid]:self.m.mesh_vertadr[mid] + self.m.mesh_vertnum[mid]]
+                pts.append((self.d.geom_xmat[g].reshape(3, 3) @ v.T).T + self.d.geom_xpos[g])
+            elif self.m.geom_bodyid[g] == body and self.m.geom_type[g] == mujoco.mjtGeom.mjGEOM_BOX:   # built bins/fixtures
+                sz = self.m.geom_size[g]
+                v = np.array([[a * sz[0], b * sz[1], c * sz[2]] for a in (-1, 1) for b in (-1, 1) for c in (-1, 1)])
                 pts.append((self.d.geom_xmat[g].reshape(3, 3) @ v.T).T + self.d.geom_xpos[g])
         p = np.vstack(pts)
         return p.min(0), p.max(0)
@@ -336,10 +442,16 @@ class Sim:
                 d.qpos[a] = HANG.get(j, 0.0) * (-1 if (s == "right" and j == "shoulder_roll") else 1)
             for a in self.fing_q[s]:
                 d.qpos[a] = FINGER[1]
-        names = list(scene.ITEMS) if self.items else []
-        pool = (scene.ITEM_SETS.get(self.item_set) or names) if names else []
-        chosen = list(rng.choice(pool, size=min(n_items or len(pool), len(pool)), replace=False))
+        names = list(self.item_defs) if self.items else []
+        pool = (scene.ITEM_SETS.get(self.item_set) or names) if names and self.kind != "cell" else names
+        chosen = list(rng.choice(pool, size=min(n_items or len(pool), len(pool)), replace=False)) if self.kind != "cell" else list(names)
         placed = []
+        if self.kind == "cell":              # fixtured: each part stands in its infeed pocket (+-2 mm)
+            for n, (x, y) in zip(names, scene.INFEED_SLOTS):
+                qa = self.item_qadr[n]
+                d.qpos[qa:qa + 3] = [x + rng.uniform(-0.002, 0.002), y + rng.uniform(-0.002, 0.002), self.desk.top_z + 0.006 + 0.0255]
+                d.qpos[qa + 3:qa + 7] = [1, 0, 0, 0]
+            names = []
         for n in names:
             qa = self.item_qadr[n]
             if n in chosen:
@@ -581,7 +693,7 @@ class Sim:
             out[n] = {"xyz": [round(float(v), 4) for v in p], "yaw_deg": round(yaw, 1),
                       "grip_jaw_deg": round((jaw + 90) % 180 - 90, 1), "width_mm": round(float(min(ex[0], ex[1])) * 1000, 1),
                       "height_mm": round(float(ex[2]) * 1000, 1),
-                      "category": scene.ITEMS[n][4], "in_container": inside,
+                      "category": self.item_defs[n][4], "in_container": inside,
                       **({"rim_radius_m": 0.0465} if n == "tape" else {}),     # 3M roll: 76 mm core, 111 mm outside
                       "held_by": next((s for s in SIDES if self.holding(s) == n), None),
                       "lifted_m": round(float(p[2] - self.desk.top_z), 4)}
@@ -710,6 +822,7 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         if not sim.dev:
             raise ValueError("not the devices scene (start with --scene devices)")
         notes = ({n: note for n, (_p, note) in scene.LAB.items()} if sim.kind == "lab" else
+                 {n: note for n, (_p, note) in scene.CELL.items()} if sim.kind == "cell" else
                  {n: note for n, (_k, _p, note) in scene.DEVICES.items()})
         return {"scene": sim.kind, "state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
                 "targets": sim.dev.targets(), "time": round(sim.d.time, 2), "devices": notes}
@@ -751,7 +864,8 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         return {"objects": sim.objects(), "desk_top_z": sim.desk.top_z,
                 "containers": {n: {"category": c[3], "box_min": sim.box[n][0].round(3).tolist(), "box_max": sim.box[n][1].round(3).tolist(),
                                    "drop_xy": sim.drop[n][:2], "drop_clear_m": sim.drop[n][2]}
-                               for n, c in scene.CONTAINERS.items() if n in sim.box}}
+                               for n, c in {**scene.CONTAINERS, **{k: (None, None, None, k) for k in ("nest", "pass_bin", "reject_bin")}}.items()
+                               if n in sim.box}}
     if cmd == "sim_point":
         # Oracle pointer: the item's top-centre projected into the head image, with VLM-like pixel noise.
         n = r["item"]
@@ -777,7 +891,7 @@ def main():
     ap.add_argument("--desk-top", type=float, default=scene.Desk.top_z, help="desk top z in the pelvis frame (m)")
     ap.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer window (watch it live)")
     ap.add_argument("--items", default="big", choices=sorted(scene.ITEM_SETS), help="item set desks are drawn from")
-    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab"],
+    ap.add_argument("--scene", default="sort", choices=["sort", "devices", "lab", "cell"],
                     help="desk sorting, IT switches/buttons, or lab (dev board + machine tending)")
     ap.add_argument("--port-offset", type=int, default=0, help="add to every port (run several sims side by side)")
     a = ap.parse_args()

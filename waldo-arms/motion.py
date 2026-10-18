@@ -26,17 +26,19 @@ SIDES = scene.SIDES
 # forearm forward, wrist neutral. IK is pulled toward it in the null space so arms never "chicken-wing".
 NATURAL = {"left": np.array([-0.45, 0.15, 0.0, 1.25, 0.0, 0.0, 0.0]),
            "right": np.array([-0.45, -0.15, 0.0, 1.25, 0.0, 0.0, 0.0])}
-# Resting pose for an idle arm: hanging by the side, elbow slightly bent (like the hanging pose, out of the way).
-REST = {"left": np.array([0.10, 0.20, 0.0, 0.90, 0.0, 0.0, 0.0]),
-        "right": np.array([0.10, -0.20, 0.0, 0.90, 0.0, 0.0, 0.0])}
+# Resting pose for an idle arm: by the hip, elbow bent, hand 9 cm clear of the desk's front edge (shoulder pitch 0.10
+# parked it 7 mm under the edge: every path out of rest then grazed the desk).
+REST = {"left": np.array([0.30, 0.20, 0.0, 0.90, 0.0, 0.0, 0.0]),
+        "right": np.array([0.30, -0.20, 0.0, 0.90, 0.0, 0.0, 0.0])}
 
 
 class Twin:
     def __init__(self, desk_top_z: float = -0.06, seed: int = 0, kind: str = "sort"):
         # kind: sort (desk + containers + items), devices / lab (sim stations), bare (desk only: a real cell whose
         # devices the twin doesn't know; the arm_server's checks and a slow, watched first press cover the rest)
-        stations = kind in ("devices", "lab", "bare")
-        self.m = (scene.build(scene.Desk(top_z=desk_top_z), items={}, containers={}, devices=False if kind == "bare" else kind)
+        stations = kind in ("devices", "lab", "cell", "bare")
+        self.m = (scene.build(scene.Desk(top_z=desk_top_z), items={}, containers={}, devices=False if kind == "bare" else kind,
+                              twin=True)
                   if stations else scene.build(scene.Desk(top_z=desk_top_z)))
         self.d = mujoco.MjData(self.m)
         m = self.m
@@ -51,7 +53,7 @@ class Twin:
         # devices are obstacles to plan around (they count like containers), items are ignored
         self.touchable = set()
         if stations:
-            names = {"lab": scene.LAB, "devices": scene.DEVICES, "bare": {}}[kind]
+            names = {"lab": scene.LAB, "devices": scene.DEVICES, "cell": scene.CELL, "bare": {}}[kind]
             self.containers = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in names)}
             self.touchable = set(self.containers)        # in a contact stage the gripper may touch devices (it presses them)
         self.items = set() if stations else {scene.item_body(m, n) for n in scene.ITEMS}

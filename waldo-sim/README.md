@@ -32,6 +32,7 @@ crayons. Sorting: writing → pen cup, supplies → tray, tools → caddy. Items
 | `teach.py` | auto-teach + replay for fixed stations (IT desk and lab): search presses on the twin, keep the fastest the sim verifies, replay with phases (tap, press-and-hold, release, hover, poke) |
 | `agent_lab.py` | the lab driven only through waldo-arms MCP tools, every step verified by sensing |
 | `stations_sim.json`, `gauges_sim.json` | the sim cell's registered containers and gauge (one-time setup, as on a real cell) |
+| `agent_cell.py`, `taught_cell.json`, `stations_cell.json`, `media/cell_agent_demo.gif` | the machine-tending + QC cell: agent loop, taught transfers, registered nest/bins, recording |
 | `media/lab_agent_demo.gif` | room view + head camera: firmware update with a two-hand BOOT+RESET, then machine tending with a STOP on overpressure |
 
 ## Run
@@ -46,8 +47,26 @@ G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs
 
 ## Scenes
 
-`--scene sort` (desk + containers + items), `--scene devices` (IT desk: power strip, router, 2FA key, start button,
-light switch), `--scene lab`:
+`--scene cell` is the industrial one: **machine tending + quality check**. Raw aluminium parts stand in an infeed
+fixture; the robot loads one into the machine's nest, presses START (the machine only runs with a part seated:
+that's the load check), watches the stack light, reads the QC lamp (green pass / red reject; one part per seed is
+out of tolerance), and unloads the finished part into the PASS or REJECT bin. Parts are fixtured, so the transfers
+are **taught** like a production robot's points: `teach.py teach` on a cell sim searches each transfer
+(`load_slot0..2`, `unload_pass`, `unload_reject`) with the planner, keeps the first the sim verifies, and records its
+exact commands; `run_task` replays them.
+
+| cell, agent through MCP tools only (`agent_cell.py`), 3 px VLM-box noise | |
+|---|---|
+| taught transfers (how production cells run) | **15/15** parts machined, QC-read and binned correctly; ~60 s sim per part |
+| free pick/place from VLM boxes (no teaching) | 2/9 |
+
+What it took: the planner's twin must contain the fixtured parts (it was sweeping the arm through them), the
+gripper opens only item width + 25 mm (fully open fingers straddled the nest walls), and the rest pose moved 9 cm
+behind the desk edge (it parked the hands 7 mm under it, so every path out of rest grazed the desk). Recording:
+`media/cell_agent_demo.gif`.
+
+The others: `--scene sort` (desk + containers + items), `--scene devices` (IT desk: power strip, router, 2FA key,
+start button, light switch), `--scene lab`:
 
 * **Dev board (coding agents, hardware-in-the-loop):** BOOT and RESET buttons 13 cm apart (one per hand), status LED
   (green app / red hung / blue bootloader), 4-digit 7-segment display showing a pairing code. Seeds divisible by 3

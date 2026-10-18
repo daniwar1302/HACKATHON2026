@@ -550,7 +550,8 @@ def _planner():
     from planner import Planner
     desk = table_z if table_z is not None else -0.06
     if _plan is None or _plan.desk != desk:
-        _plan = Planner(_parm, desk)
+        # the twin plans around what it knows: G1_TWIN=bare (desk only, a real cell) or a sim scene (sort, cell, lab)
+        _plan = Planner(_parm, desk, scene_kind=os.environ.get("G1_TWIN", "bare"))
     return _plan
 
 
@@ -610,7 +611,9 @@ def pick(u: float | None = None, v: float | None = None, box: list[float] | None
     p = _planner()
     r = _receipt("pick", {"u": u, "v": v, "box": box, "side": side},
                  lambda: _skill(lambda: p.pick_item(np.array(g["centre"]), g["jaw_deg"], height_m=g["height"],
-                                                    prefer_side=_side(side) if side else None, rim_radius_m=rim)))
+                                                    prefer_side=_side(side) if side else None, rim_radius_m=rim,
+                                                    round_item=not rim and g["length"] - g["width"] < 0.008,
+                                                    width_m=g["width"])))
     return {"side": r["side"], "held": True, "gripper_gap_mm": r["gripper"].get("gap_mm"),
             "grasp": {"jaw_deg": r["jaw_deg"], "pitch_deg": r["pitch_deg"], "tries": len(r["attempts"])},
             "object": {k: (round(g[k], 3) if isinstance(g[k], float) else g[k]) for k in ("height", "width", "length", "ring")},
@@ -690,7 +693,7 @@ def _teach():
 def _taught() -> dict:
     """Every station's taught controls (taught.json = IT desk, taught_lab.json = dev board + machine)."""
     out = {}
-    for f in sorted(TAUGHT_DIR.glob("taught*.json")):
+    for f in ([TAUGHT_DIR] if TAUGHT_DIR.is_file() else sorted(TAUGHT_DIR.glob("taught*.json"))):   # one cell's file, or all
         out.update(json.loads(f.read_text()))
     if not out:
         raise ToolError(f"no taught controls in {TAUGHT_DIR}; teach them first (waldo-sim/teach.py)")
@@ -851,7 +854,7 @@ def save_control(name: str) -> dict:
     """Keep the last teach_control(name) as a taught control (taught_real.json), so run_task(name) replays it."""
     if name not in _pending:
         raise ToolError(f"nothing pending for {name!r}; run teach_control first")
-    f = TAUGHT_DIR / "taught_real.json"
+    f = TAUGHT_DIR if TAUGHT_DIR.is_file() else TAUGHT_DIR / "taught_real.json"
     taught = json.loads(f.read_text()) if f.exists() else {}
     taught[name] = _pending.pop(name)
     f.write_text(json.dumps(taught))
