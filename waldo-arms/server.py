@@ -499,14 +499,48 @@ RECEIPTS = Path(os.environ.get("G1_RECEIPTS", Path(__file__).resolve().parent / 
 _plan = None
 
 
+_sim = None
+
+
+def _is_sim() -> bool:
+    """waldo-sim answers sim_* commands; the real arm_server doesn't."""
+    global _sim
+    if _sim is None:
+        try:
+            arm("sim_objects", timeout_s=3)
+            _sim = True
+        except ToolError:
+            _sim = False
+    return _sim
+
+
 def _parm(cmd, **kw):
-    """arm_server for planner.py: its retries expect PlanError; sim-only waits become real sleeps on the robot."""
+    """arm_server for planner.py / teach.py: their retries expect PlanError. On the real robot `trajectory` is
+    non-blocking, so wait for it here, polling `state` (which also keeps arm_server's 2 s heartbeat alive), and fail
+    if the arm froze. Sim-only bits become real equivalents: sim_wait sleeps, `contact` is dropped."""
     from planner import PlanError
-    if cmd == "sim_wait" and "sim" not in ADDR and "127.0.0.1" not in ADDR:
+    sim = _is_sim()
+    if cmd == "sim_wait" and not sim:
         time.sleep(float(kw.get("seconds", 0)))
         return {"ok": True}
+    if not sim:
+        kw.pop("contact", None)
     try:
-        return arm(cmd, timeout_s=120, **kw)
+        r = arm(cmd, timeout_s=120, **kw)
+        if cmd == "trajectory" and not sim:
+            deadline = time.monotonic() + float(kw["times"][-1]) + 5.0
+            time.sleep(0.1)
+            while True:
+                st = arm("state", timeout_s=3)["arm"]
+                if st.get("frozen"):
+                    raise PlanError(f"arm froze during the trajectory: {st.get('freeze_reason')}")
+                if not st.get("moving"):
+                    break
+                if time.monotonic() > deadline:
+                    arm("freeze", reason="trajectory overran")
+                    raise PlanError("trajectory overran its time; arm frozen")
+                time.sleep(0.2)
+        return r
     except ToolError as e:
         raise PlanError(str(e))
 
@@ -646,8 +680,9 @@ def home(side: str = "both") -> str:
 
 def _teach():
     import sys
-    if str(TAUGHT_DIR) not in sys.path:
-        sys.path.insert(0, str(TAUGHT_DIR))
+    sim_dir = str(Path(__file__).resolve().parent.parent / "waldo-sim")     # teach.py lives with the sim
+    if sim_dir not in sys.path:
+        sys.path.insert(0, sim_dir)
     import teach
     return teach
 
@@ -729,6 +764,98 @@ def show_receipt(receipt_id: str) -> Image:
     buf = io.BytesIO()
     out.save(buf, "JPEG", quality=80)
     return Image(data=buf.getvalue(), format="jpeg")
+
+
+_pending: dict = {}      # name -> taught control from teach_control, waiting for save_control
+
+
+@mcp.tool()
+def teach_control(name: str, u: float, v: float, push: str = "down", depth_mm: float = 5.0,
+                  indicator: list[float] | None = None, side: str | None = None, scale: str = "pixels") -> dict:
+    """Teach a new button / switch / key on the real cell by pointing at it: (u, v) = the spot to press on the head
+    image; push = down (buttons, keys, rocker ends), forward (a switch facing the robot) or [x, y, z]. Plans an
+    approach + press against a desk-only twin, runs it once through arm_server's own checks (watch it the first
+    time; G1_JOINT_SPEED slows it), and reports whether `indicator` (a light's [u, v]) changed. If it did what you
+    wanted, save_control(name) keeps it for run_task. Start from home: the press is replayed from where it began."""
+    teach = _teach()
+    cfg = _head_config()
+    h, w = cfg["image_shape"]
+    uu, vv = vision.to_pixels(float(u), float(v), scale, w, h)
+    z, conf = vision.depth_at(_depth_m(), uu, vv)
+    if z is None:
+        raise ToolError(f"no depth at ({uu:.0f}, {vv:.0f}); point at the control's surface")
+    T, _ = _pelvis_from_cam()
+    point = vision.pixel_to_pelvis(uu, vv, z, cfg["color_intrinsics"], T)
+    dirn = {"down": [0, 0, -1], "forward": [1, 0, 0]}.get(push, push)
+    try:
+        dirn = [float(c) for c in dirn]
+    except (TypeError, ValueError):
+        raise ToolError("push is down, forward or [x, y, z]")
+    from motion import Twin
+    from planner import PlanError
+    p = _planner()
+    twin = Twin(p.desk, kind="bare")
+    twin.PAD = 0.004
+    arm("enable")
+    q0 = np.array(arm("state")["arm"]["q"], float)
+    light = lambda: _light_state(indicator) if indicator else None
+    before, tried, why = light(), 0, []
+    for sd, d, approach, press in teach.candidates(p, twin, q0, point, dirn, depth_mm / 1000):
+        if side and sd != side:
+            continue
+        tried += 1
+        moved = []
+        def go():
+            arm("grasp", side=sd)
+            teach.send(_parm, sd, approach)
+            moved.append("approach")
+            teach.send(_parm, sd, press, contact=True)
+            _parm("sim_wait", seconds=0.3)
+            teach.send(_parm, sd, press[::-1], contact=True)
+            teach.send(_parm, sd, approach[::-1])
+            moved.clear()
+            return {}
+        try:
+            _receipt("teach_control", {"name": name, "u": u, "v": v, "push": push}, lambda: _skill(go))
+        except ToolError as e:
+            why.append(str(e)[:100])
+            if moved:                 # rejected mid-way: back out the way we came, then stop for a human look
+                try:
+                    teach.send(_parm, sd, approach[::-1])
+                except PlanError:
+                    pass
+                raise ToolError(f"press rejected after the approach ({why[-1]}); arm backed out. Check the camera, "
+                                "then teach_control again with another side, push or depth")
+            if tried >= 4:
+                break
+            continue
+        after = light()
+        _pending[name] = {"side": sd, "push": np.round(d, 4).tolist(),
+                          "approach": [list(map(float, q)) for q in approach], "press": [list(map(float, q)) for q in press]}
+        out = {"name": name, "side": sd, "point_xyz": [round(float(c), 4) for c in point], "tried": tried,
+               "next": f"if it worked, save_control('{name}'); else teach_control again (other side / push / depth)"}
+        if indicator:
+            out.update(indicator_before=before, indicator_after=after,
+                       changed=(before["on"], before.get("colour")) != (after["on"], after.get("colour")))
+        return out
+    raise ToolError(f"no press that the arm accepts ({tried} tried): {'; '.join(why[-2:]) or 'no reachable approach'}")
+
+
+def _light_state(pt):
+    l = read_light([pt])["lights"][0]
+    return {"on": l["on"], "colour": l.get("colour")}
+
+
+@mcp.tool()
+def save_control(name: str) -> dict:
+    """Keep the last teach_control(name) as a taught control (taught_real.json), so run_task(name) replays it."""
+    if name not in _pending:
+        raise ToolError(f"nothing pending for {name!r}; run teach_control first")
+    f = TAUGHT_DIR / "taught_real.json"
+    taught = json.loads(f.read_text()) if f.exists() else {}
+    taught[name] = _pending.pop(name)
+    f.write_text(json.dumps(taught))
+    return {"saved": name, "file": str(f), "controls": sorted(taught)}
 
 
 @mcp.tool()

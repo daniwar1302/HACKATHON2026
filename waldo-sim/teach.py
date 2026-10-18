@@ -13,6 +13,7 @@ replay: run a taught control: rest -> taught approach -> press -> release -> res
 """
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -41,8 +42,11 @@ LAB_CONTROLS = {
 }
 
 
+SPEED = float(os.environ.get("G1_JOINT_SPEED", 1.2))     # peak joint speed (rad/s); run the real robot slower at first
+
+
 def send(arm, side, path, contact=False):
-    q, times = timed(path)
+    q, times = timed(path, max_joint_speed=SPEED)
     arm("trajectory", q=q, times=times, side=side, **({"contact": True} if contact else {}))
 
 
