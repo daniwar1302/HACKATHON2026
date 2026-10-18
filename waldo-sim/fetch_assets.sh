@@ -12,5 +12,6 @@ fi
 cd assets/gso_repo && git sparse-checkout set \
   models/Markings_Desk_Caddy models/Design_Ideas_Drawer_Store_Organizer models/Ecoforms_Cup_B4_SAN \
   models/3M_Vinyl_Tape_Green_1_x_36_yd models/Diamond_Visions_Scissors_Red models/Crayola_Crayons_24_count \
-  models/Curver_Storage_Bin_Black_Small
+  models/Curver_Storage_Bin_Black_Small models/Big_Dot_Aqua_Pencil_Case \
+  models/Epson_LabelWorks_LC4WBN9_Tape_reel_labels_047_x_295_Roll_Black_on_White models/Office_Depot_HP_950XL_Ink_Cartridge_Black_CN045AN
 echo "assets ready"

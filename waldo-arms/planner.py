@@ -107,14 +107,14 @@ class Planner:
     PITCHES = (60, 50, 70, 45, 80)
     TRIES_PER_SIDE = 3
 
-    def __init__(self, arm, desk_top_z: float = -0.06, log=None, twin=True):
+    def __init__(self, arm, desk_top_z: float = -0.06, log=None, twin=True, scene_kind: str = "sort"):
         self.arm, self.desk, self.log = arm, desk_top_z, log or (lambda *a: None)
         self.R = {"left": None, "right": None}
         self.twin = None
         if twin:
             try:                               # collision-free motion planning on a MuJoCo digital twin
                 from motion import Twin
-                self.twin = Twin(desk_top_z)
+                self.twin = Twin(desk_top_z, kind=scene_kind)
             except Exception as e:             # no mujoco / assets on this machine: straight-line moves only
                 self.log(f"motion planning unavailable ({e}); using straight-line moves")
 
@@ -264,7 +264,7 @@ class Planner:
         else:
             self.stage("over target", lambda: self.lin(side, [g.pre[0], g.pre[1], self.desk + 0.14], None))
             self.stage("approach (turning)", lambda: self.lin_turn(side, g.pre, g.R))
-        self.stage("descend", lambda: self.lin(side, g.grip, g.R, step=0.015, speed=0.06, contact=True))
+        self.stage("descend", lambda: self.lin(side, g.grip, g.R, step=0.015, speed=0.10, contact=True))
         self.arm("grasp", side=side)
         self.stage("lift", lambda: self.lin(side, g.grip - 0.02 * g.back + np.array([0, 0, lift]), g.R, contact=True))
         st = self.arm("gripper_state", side=side)
@@ -310,6 +310,46 @@ class Planner:
                         break
         raise PlanError("; ".join(attempts[-4:]) or "no attempts")
 
+    # ----- pressing things: switches, buttons, keys -----
+    TIP = 0.030      # closed Dex1 fingertips sit ~3 cm beyond the jaw centre along the hand's x axis
+
+    @staticmethod
+    def push_R(push):
+        """Hand frame for poking along `push` with the fingertips: hand x = push, jaws level (y horizontal)."""
+        x = np.asarray(push, float) / np.linalg.norm(push)
+        y = np.cross([0.0, 0.0, 1.0], x)
+        y = np.array([0.0, 1.0, 0.0]) if np.linalg.norm(y) < 1e-6 else y / np.linalg.norm(y)
+        return np.column_stack([x, y, np.cross(x, y)])
+
+    def press(self, point, push, depth=0.006, side=None, hold_s=0.4, standoff=0.06):
+        """Press a switch / button / key at `point` (pelvis frame) by pushing the closed fingertips along `push`
+        `depth` metres past the surface, hold, and back off. Returns the side used."""
+        point, push = np.asarray(point, float), np.asarray(push, float) / np.linalg.norm(push)
+        sides = [side] if side else (["left", "right"] if point[1] > 0 else ["right", "left"])
+        last = None
+        for sd in sides:
+            R = self.push_R(push)
+            centre = point + push * depth - self.TIP * push
+            pre = centre - push * (depth + standoff)
+            try:
+                self.arm("enable")
+                self.arm("grasp", side=sd)                       # close the jaws: poke with the fingertips
+                self.ensure_clear(sd)
+                self.stage("to press point", lambda: self.move_free(sd, pre, R))
+                self.stage("press", lambda: self.lin(sd, centre, R, step=0.01, speed=0.08, contact=True))
+                self.arm("gripper_state", side=sd)
+                if hold_s and "sim_wait" in getattr(self, "_sim_cmds", ("sim_wait",)):
+                    try:
+                        self.arm("sim_wait", seconds=hold_s)
+                    except PlanError:
+                        pass
+                self.stage("release", lambda: self.lin(sd, pre, R, contact=True))
+                return sd
+            except PlanError as e:
+                last = f"{sd}: {e}"
+                self.recover(sd)
+        raise PlanError(last or "press failed")
+
     def place(self, side, box_min, box_max, drop_dz=0.07):
         """Carry the held item over the container's centre and open. Keeps the grasp orientation when reachable."""
         cx, cy = (box_min[0] + box_max[0]) / 2, (box_min[1] + box_max[1]) / 2
@@ -326,9 +366,17 @@ class Planner:
         self.arm("open", side=side)
 
     def home(self, side):
-        """Park above the desk's side with level jaws: out of the camera's view and the other hand's way."""
+        """Rest the arm low by the side (like a person's idle arm): out of the camera's view and the other hand's way."""
         self.ensure_clear(side)
         if self.twin is not None:
-            self.stage("to side", lambda: self.move_free(side, self.lift_points(side)[1], None))
-        else:
-            self.stage("to side", lambda: self.lin(side, self.lift_points(side)[1], None))
+            from motion import REST, timed
+            q_now = self.q14()
+            goal = q_now.copy()
+            goal[slice(0, 7) if side == "left" else slice(7, 14)] = REST[side]
+            path = self.twin.rrt_connect(side, q_now, goal)
+            if path:
+                q, times = timed(path)
+                self.stage("rest", lambda: self.arm("trajectory", q=q, times=times, side=side))
+                self.R[side] = None
+                return
+        self.stage("to side", lambda: self.lin(side, self.lift_points(side)[1], None))

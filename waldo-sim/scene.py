@@ -53,6 +53,14 @@ ITEMS = {
     "tape": ("gso", "3M_Vinyl_Tape_Green_1_x_36_yd", 0.060, None, "supplies"),
     "scissors": ("gso", "Diamond_Visions_Scissors_Red", 0.060, None, "tools"),
     "crayons": ("gso", "Crayola_Crayons_24_count", 0.120, None, "tools"),
+    "pencil_case": ("gso", "Big_Dot_Aqua_Pencil_Case", 0.150, None, "supplies"),
+    "label_reel": ("gso", "Epson_LabelWorks_LC4WBN9_Tape_reel_labels_047_x_295_Roll_Black_on_White", 0.090, None, "supplies"),
+    "ink_box": ("gso", "Office_Depot_HP_950XL_Ink_Cartridge_Black_CN045AN", 0.070, None, "supplies"),
+}
+# Which items a desk is drawn from. "big" (default): no sticky notes, stickers, erasers, pens or pencils.
+ITEM_SETS = {
+    "big": ["marker_black", "marker_blue", "crayons", "scissors", "tape", "pencil_case", "label_reel", "ink_box"],
+    "all": None,   # every item above
 }
 # Containers (fixed on the desk): name -> (gso model, (x, y) pelvis frame, yaw deg, category it receives)
 CONTAINERS = {
@@ -94,7 +102,7 @@ def _mesh_bottom(model_dir: str) -> float:
     return float(zmin)
 
 
-def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINERS) -> mujoco.MjModel:
+def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINERS, devices: bool = False) -> mujoco.MjModel:
     spec = mujoco.MjSpec.from_file(str(URDF))
     spec.meshdir = str(URDF.parent)
     spec.compiler.fusestatic = False
@@ -162,6 +170,8 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             wb.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, pos=[lx + sx, ly + sy, (desk.top_z - 0.03 + FLOOR_Z) / 2],
                         size=[0.02, 0.02, (desk.top_z - 0.03 - FLOOR_Z) / 2], rgba=[0.45, 0.32, 0.2, 1])
 
+    if devices:
+        add_devices(spec, desk)
     for name, (model, (x, y), yaw, _cat) in containers.items():
         quat = [math.cos(math.radians(yaw) / 2), 0, 0, math.sin(math.radians(yaw) / 2)]
         _gso_body(spec, wb, model, name, [x, y, desk.top_z - _mesh_bottom(model) + 0.001], quat, None, free=False)
@@ -182,6 +192,65 @@ def build(desk: Desk = Desk(), items: dict = ITEMS, containers: dict = CONTAINER
             body.add_geom(name=f"{name}_geom", type=gtype, size=list(p) + [0] * (3 - len(p)), quat=quat, rgba=list(rgba),
                           mass=mass, friction=[0.9, 0.01, 0.001], condim=4)
     return spec.compile()
+
+
+# ---- devices: switches and buttons an agent might need a robot to operate (all arms-only) ----
+# name -> (kind, (x, y) on the desk in the pelvis frame, note). Positions are within the measured reach.
+DEVICES = {
+    "power_strip": ("rocker", (0.30, -0.14), "router power: the strip's rocker switch (press the O end = off, I end = on)"),
+    "router": ("router", (0.40, -0.16), "router with power + internet LEDs (lit while the strip is on)"),
+    "security_key": ("button", (0.27, 0.06), "USB security key: tap the gold pad to approve 2FA"),
+    "start_button": ("big_button", (0.31, 0.20), "machine start button"),
+    "light_switch": ("toggle", (0.36, 0.04), "wall light switch on a stand, facing the robot (push the lever up = on)"),
+}
+
+
+def add_devices(spec, desk: "Desk"):
+    """Desk devices with real joints: rockers/toggles hold where they're pushed (friction), buttons spring back."""
+    wb, top = spec.worldbody, desk.top_z
+    box = mujoco.mjtGeom.mjGEOM_BOX
+    cyl = mujoco.mjtGeom.mjGEOM_CYLINDER
+    for name, (kind, (x, y), _note) in DEVICES.items():
+        if kind == "rocker":            # power strip 30 x 5.5 x 4 cm, rocker on top near one end, axis across the strip
+            b = wb.add_body(name=name, pos=[x, y, top + 0.02])
+            b.add_geom(type=box, size=[0.028, 0.15, 0.02], rgba=[0.92, 0.92, 0.9, 1])
+            for k in range(4):          # sockets
+                b.add_geom(type=box, size=[0.012, 0.012, 0.0005], pos=[0, -0.08 + 0.045 * k, 0.0202], rgba=[0.2, 0.2, 0.2, 1], contype=0, conaffinity=0)
+            r = b.add_body(name=f"{name}_rocker", pos=[0, 0.11, 0.022])
+            r.add_joint(name=f"{name}_rocker", type=mujoco.mjtJoint.mjJNT_HINGE, axis=[1, 0, 0], range=[-0.26, 0.26],
+                        frictionloss=0.06, damping=0.01, armature=0.0005)
+            r.add_geom(name=f"{name}_rocker_geom", type=box, size=[0.012, 0.018, 0.006], rgba=[0.85, 0.1, 0.1, 1], mass=0.005)
+            r.add_geom(type=box, size=[0.0015, 0.004, 0.0005], pos=[0, 0.011, 0.0062], rgba=[1, 1, 1, 1], contype=0, conaffinity=0)  # "I" end mark
+        elif kind == "router":          # 18 x 12 x 3 cm box, two LEDs on top front edge
+            b = wb.add_body(name=name, pos=[x, y, top + 0.015])
+            b.add_geom(type=box, size=[0.06, 0.09, 0.015], rgba=[0.12, 0.12, 0.14, 1])
+            for k, led in enumerate(("power", "internet")):
+                b.add_geom(name=f"{name}_led_{led}", type=box, size=[0.004, 0.004, 0.0015], pos=[-0.05, -0.02 + 0.02 * k, 0.0155],
+                           rgba=[0.15, 0.15, 0.15, 1], contype=0, conaffinity=0)
+        elif kind == "button":          # security key: 4.5 x 2 cm body, gold touch pad on a spring
+            b = wb.add_body(name=name, pos=[x, y, top + 0.004])
+            b.add_geom(type=box, size=[0.0225, 0.01, 0.004], rgba=[0.1, 0.1, 0.1, 1])
+            pad = b.add_body(name=f"{name}_pad", pos=[0.008, 0, 0.005])
+            pad.add_joint(name=f"{name}_pad", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[-0.003, 0],
+                          stiffness=300, damping=2, springref=0)
+            pad.add_geom(type=cyl, size=[0.0055, 0.0015, 0], rgba=[0.85, 0.7, 0.2, 1], mass=0.002)
+        elif kind == "big_button":      # 6 x 6 x 4 cm box, 3.5 cm green mushroom button on a spring
+            b = wb.add_body(name=name, pos=[x, y, top + 0.02])
+            b.add_geom(type=box, size=[0.03, 0.03, 0.02], rgba=[0.95, 0.8, 0.1, 1])
+            btn = b.add_body(name=f"{name}_cap", pos=[0, 0, 0.026])
+            btn.add_joint(name=f"{name}_cap", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1], range=[-0.008, 0],
+                          stiffness=250, damping=3, springref=0)
+            btn.add_geom(type=cyl, size=[0.0175, 0.006, 0], rgba=[0.1, 0.75, 0.2, 1], mass=0.01)
+        elif kind == "toggle":          # switch plate on a stand, facing the robot (-x), lever pivots about y
+            b = wb.add_body(name=name, pos=[x, y, top + 0.10])
+            b.add_geom(type=box, size=[0.004, 0.035, 0.06], rgba=[0.95, 0.95, 0.93, 1])
+            b.add_geom(type=box, size=[0.02, 0.02, 0.045], pos=[0.02, 0, -0.055], rgba=[0.4, 0.4, 0.42, 1])   # stand
+            lev = b.add_body(name=f"{name}_lever", pos=[-0.006, 0, 0])
+            lev.add_joint(name=f"{name}_lever", type=mujoco.mjtJoint.mjJNT_HINGE, axis=[0, 1, 0], range=[-0.35, 0.35],
+                          frictionloss=0.05, damping=0.01, armature=0.0005)
+            lev.add_geom(name=f"{name}_lever_geom", type=box, size=[0.008, 0.009, 0.018], pos=[-0.006, 0, 0], rgba=[0.97, 0.97, 0.95, 1], mass=0.004)
+            b.add_geom(name=f"{name}_lamp", type=mujoco.mjtGeom.mjGEOM_SPHERE, size=[0.008, 0, 0], pos=[-0.002, 0, 0.075],
+                       rgba=[0.25, 0.25, 0.2, 1], contype=0, conaffinity=0)   # the "light"
 
 
 def item_body(m: mujoco.MjModel, name: str) -> int:

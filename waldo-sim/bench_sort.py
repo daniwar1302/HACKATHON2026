@@ -39,8 +39,9 @@ def main():
     ap.add_argument("--items", type=int, default=3)
     ap.add_argument("--noise-px", type=float, default=0.0)
     ap.add_argument("--truth", action="store_true")
+    ap.add_argument("--addr", default="tcp://127.0.0.1:15810")
     a = ap.parse_args()
-    arm = Arm("tcp://127.0.0.1:15810")
+    arm = Arm(a.addr)
     info = arm("sim_objects")
     p = Planner(arm, info["desk_top_z"])
     if not a.truth:

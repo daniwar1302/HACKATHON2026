@@ -42,7 +42,8 @@ READY = {"left": [0.28, 0.20, 0.05], "right": [0.28, -0.20, 0.05]}
 HANG = {"shoulder_pitch": 0.28, "shoulder_roll": 0.22, "elbow": 0.98}
 SPAWN = {"x": (0.26, 0.38), "y": (-0.20, 0.20)}     # visible from the head camera AND reachable at desk height
 RADIUS = {"marker_black": 0.064, "marker_blue": 0.064, "pen": 0.07, "pencil": 0.088, "eraser": 0.028,
-          "sticky_notes": 0.054, "sticker_sheet": 0.057, "tape": 0.056, "scissors": 0.108, "crayons": 0.07}
+          "sticky_notes": 0.054, "sticker_sheet": 0.057, "tape": 0.056, "scissors": 0.108, "crayons": 0.07,
+          "pencil_case": 0.113, "label_reel": 0.048, "ink_box": 0.049}
 
 
 def motor_q(finger):   # finger slide (m) -> Dex1 motor angle reported by the real service (0 closed .. 5.4 open)
@@ -56,10 +57,80 @@ def down_R(jaw_deg: float) -> np.ndarray:
     return np.column_stack([x, y, np.cross(x, y)])
 
 
+class Devices:
+    """Switch/button state for the devices scene: on/off, presses (rising edges), history, and status LEDs."""
+    LED_OFF, GREEN, AMBER, LAMP_ON = [0.15, 0.15, 0.15, 1], [0.1, 0.95, 0.2, 1], [1.0, 0.7, 0.1, 1], [1.0, 0.95, 0.6, 1]
+    BOOT_S = 3.0                       # router internet LED comes on this long after power-on (like a real reboot)
+
+    def __init__(self, m, d):
+        self.m, self.d = m, d
+        j = lambda n: m.joint(n).qposadr[0]
+        self.q = {"rocker": j("power_strip_rocker"), "key": j("security_key_pad"), "button": j("start_button_cap"),
+                  "lever": j("light_switch_lever")}
+        self.g = {"power": m.geom("router_led_power").id, "internet": m.geom("router_led_internet").id, "lamp": m.geom("light_switch_lamp").id}
+        self.bodies = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in scene.DEVICES)}
+        self.reset()
+
+    def reset(self):
+        self.d.qpos[self.q["rocker"]] = 0.24          # strip ON: the router is running
+        self.d.qpos[self.q["lever"]] = -0.30          # light OFF (lever down)
+        self.d.qpos[self.q["key"]] = self.d.qpos[self.q["button"]] = 0.0
+        self.history = []                             # (t, event)
+        self.presses = {"security_key": 0, "start_button": 0}
+        self._pressed = {"security_key": False, "start_button": False}
+        self.power_on_t = 0.0
+        self.state = self.read()
+        self.state["internet"] = True
+
+    def read(self):
+        q = self.d.qpos
+        return {"strip_on": bool(q[self.q["rocker"]] > 0.0), "light_on": bool(q[self.q["lever"]] > 0.0)}
+
+    def update(self):
+        t = self.d.time
+        now = self.read()
+        if now["strip_on"] != self.state["strip_on"]:
+            self.history.append((round(t, 2), "router power ON" if now["strip_on"] else "router power OFF"))
+            if now["strip_on"]:
+                self.power_on_t = t
+        if now["light_on"] != self.state["light_on"]:
+            self.history.append((round(t, 2), "light ON" if now["light_on"] else "light OFF"))
+        internet = now["strip_on"] and (t - self.power_on_t >= self.BOOT_S or self.state.get("internet") and now["strip_on"] == self.state["strip_on"])
+        if internet and not self.state.get("internet"):
+            self.history.append((round(t, 2), "router internet UP"))
+        now["internet"] = bool(internet)
+        for name, key, th in (("security_key", "key", -0.0018), ("start_button", "button", -0.005)):
+            down = self.d.qpos[self.q[key]] < th
+            if down and not self._pressed[name]:
+                self.presses[name] += 1
+                self.history.append((round(t, 2), f"{name} pressed"))
+            self._pressed[name] = down
+        self.state = now
+        rgba = self.m.geom_rgba
+        rgba[self.g["power"]] = self.GREEN if now["strip_on"] else self.LED_OFF
+        rgba[self.g["internet"]] = self.GREEN if now["internet"] else (self.AMBER if now["strip_on"] else self.LED_OFF)
+        rgba[self.g["lamp"]] = self.LAMP_ON if now["light_on"] else self.LED_OFF
+
+    def targets(self):
+        """Where to touch each control (pelvis frame) and which way to push, from the live model."""
+        m, d = self.m, self.d
+        def wpt(body, local):
+            b = m.body(body).id
+            return (d.xpos[b] + d.xmat[b].reshape(3, 3) @ np.asarray(local, float)).round(4).tolist()
+        return {
+            "power_strip_off_end": {"point": wpt("power_strip_rocker", [0, -0.012, 0.006]), "push": [0, 0, -1]},
+            "power_strip_on_end": {"point": wpt("power_strip_rocker", [0, 0.012, 0.006]), "push": [0, 0, -1]},
+            "security_key_pad": {"point": wpt("security_key_pad", [0, 0, 0.0015]), "push": [0, 0, -1]},
+            "start_button": {"point": wpt("start_button_cap", [0, 0, 0.006]), "push": [0, 0, -1]},
+            "light_switch_lever_bottom": {"point": wpt("light_switch_lever", [-0.014, 0, -0.012]), "push": [1, 0, 0]},
+            "light_switch_lever_top": {"point": wpt("light_switch_lever", [-0.014, 0, 0.012]), "push": [1, 0, 0]},
+        }
+
+
 class Sim:
-    def __init__(self, speed: float, desk: scene.Desk):
-        self.desk = desk
-        self.m = scene.build(desk)
+    def __init__(self, speed: float, desk: scene.Desk, item_set: str = "big", kind: str = "sort"):
+        self.desk, self.item_set, self.kind = desk, item_set, kind
+        self.m = (scene.build(desk, items={}, containers={}, devices=True) if kind == "devices" else scene.build(desk))
         self.d = mujoco.MjData(self.m)
         self.speed = speed
         m = self.m
@@ -73,14 +144,17 @@ class Sim:
         self.site = {s: m.site(f"{s}_grasp").id for s in SIDES}
         self.arm_bodies = {s: {b for b in range(m.nbody) if m.body(b).name.startswith(s) and any(
             k in m.body(b).name for k in ("shoulder", "elbow", "wrist", "dex1"))} for s in SIDES}
-        self.items = {n: scene.item_body(m, n) for n in scene.ITEMS}
+        self.items = {} if kind == "devices" else {n: scene.item_body(m, n) for n in scene.ITEMS}
+        self.dev = Devices(m, self.d) if kind == "devices" else None
         self.item_qadr = {n: m.jnt_qposadr[m.body_jntadr[b]] for n, b in self.items.items()}
         self.item_dadr = {n: m.jnt_dofadr[m.body_jntadr[b]] for n, b in self.items.items()}
-        self.containers = {n: m.body(f"{n}_model").id for n in scene.CONTAINERS}
+        self.containers = {} if kind == "devices" else {n: m.body(f"{n}_model").id for n in scene.CONTAINERS}
         self.static_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] == 0 or m.geom_bodyid[g] in self.containers.values()}
         mujoco.mj_forward(m, self.d)
         self.box = {n: self._aabb(b) for n, b in self.containers.items()}
-        self.extent = {n: self._body_extent(b) for n, b in self.items.items()}
+        ec = {n: self._body_extent(b) for n, b in self.items.items()}
+        self.extent = {n: e for n, (e, _) in ec.items()}
+        self.centre = {n: c for n, (_, c) in ec.items()}     # scanned meshes aren't centred on the body origin
         self.rest_z = {}
         self.enabled = self.frozen = self.moving = False
         self.freeze_reason, self.table = "", None
@@ -114,7 +188,7 @@ class Sim:
                 local = np.array([[a * r, b * r, c * h] for a in (-1, 1) for b in (-1, 1) for c in (-1, 1)])
             pts.append(((Rg @ local.T).T + pg - pb) @ Rb)   # into the body frame
         p = np.vstack(pts)
-        return p.max(0) - p.min(0)
+        return p.max(0) - p.min(0), (p.max(0) + p.min(0)) / 2     # size, geometric centre (body frame)
 
     # ----- world -----
     def reset(self, seed: int, n_items: int | None = None):
@@ -126,8 +200,9 @@ class Sim:
                 d.qpos[a] = HANG.get(j, 0.0) * (-1 if (s == "right" and j == "shoulder_roll") else 1)
             for a in self.fing_q[s]:
                 d.qpos[a] = FINGER[1]
-        names = list(scene.ITEMS)
-        chosen = list(rng.choice(names, size=min(n_items or len(names), len(names)), replace=False))
+        names = list(scene.ITEMS) if self.items else []
+        pool = (scene.ITEM_SETS.get(self.item_set) or names) if names else []
+        chosen = list(rng.choice(pool, size=min(n_items or len(pool), len(pool)), replace=False))
         placed = []
         for n in names:
             qa = self.item_qadr[n]
@@ -143,12 +218,15 @@ class Sim:
                     break
             placed.append((n, xy))
             yaw = rng.uniform(-math.pi, math.pi)
-            d.qpos[qa:qa + 2] = xy
+            c = self.centre[n]                         # place the item's geometric centre (not its origin) at xy
+            d.qpos[qa:qa + 2] = xy - np.array([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]]) @ c[:2]
             q0, qz, out = d.qpos[qa + 3:qa + 7].copy(), np.array([math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]), np.zeros(4)
             mujoco.mju_mulQuat(out, qz, q0)
             d.qpos[qa + 3:qa + 7] = out
             d.qpos[qa + 2] = self.desk.top_z + 0.03   # dropped from 3 cm, settles below
         self.chosen = chosen
+        if self.dev:
+            self.dev.reset()
         mujoco.mj_forward(m, d)
         self._hold_ctrl()
         for s in SIDES:
@@ -168,6 +246,8 @@ class Sim:
     def step(self, n=1):
         for _ in range(n):
             mujoco.mj_step(self.m, self.d)
+            if self.dev:
+                self.dev.update()
             if self.viewer is not None and time.monotonic() - self._last_sync > 1 / 60:
                 self._last_sync = time.monotonic()
                 self.viewer.sync()
@@ -252,7 +332,7 @@ class Sim:
             for s in SIDES:
                 arm, other = self.arm_bodies[s], self.arm_bodies["right" if s == "left" else "left"]
                 hit, hg = (b2, c.geom2) if b1 in arm else (b1, c.geom1) if b2 in arm else (None, None)
-                if hit is None or hit in arm or hit in item_bodies:
+                if hit is None or hit in arm or hit in item_bodies or (self.dev and hit in self.dev.bodies):
                     continue
                 mine = b1 if b1 in arm else b2
                 if s in contact_ok and mine in self.fing_body[s] and hit == 0:
@@ -348,7 +428,8 @@ class Sim:
         out = {}
         for n in self.chosen:
             b = self.items[n]
-            p, R = self.d.xpos[b], self.d.xmat[b].reshape(3, 3)
+            R = self.d.xmat[b].reshape(3, 3)
+            p = self.d.xpos[b] + R @ self.centre[n]      # geometric centre, where a grasp should aim
             inside = next((c for c, (lo, hi) in self.box.items()
                            if lo[0] <= p[0] <= hi[0] and lo[1] <= p[1] <= hi[1] and p[2] <= hi[2] + 0.01), None)
             ex = self.extent[n]
@@ -482,16 +563,25 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
                 sim.d.ctrl[a] = FINGER[1]
         sim.step(100)
         return {}
+    if cmd == "sim_devices":
+        if not sim.dev:
+            raise ValueError("not the devices scene (start with --scene devices)")
+        return {"state": sim.dev.state, "presses": sim.dev.presses, "history": sim.dev.history[-30:],
+                "targets": sim.dev.targets(), "time": round(sim.d.time, 2),
+                "devices": {n: note for n, (_k, _p, note) in scene.DEVICES.items()}}
+    if cmd == "sim_wait":                           # let sim time pass (e.g. "wait 5 s before powering back on")
+        sim.step(int(float(r.get("seconds", 1.0)) / sim.m.opt.timestep))
+        return {"time": round(sim.d.time, 2)}
     if cmd == "sim_objects":
         return {"objects": sim.objects(), "desk_top_z": sim.desk.top_z,
                 "containers": {n: {"category": c[3], "box_min": sim.box[n][0].round(3).tolist(), "box_max": sim.box[n][1].round(3).tolist()}
-                               for n, c in scene.CONTAINERS.items()}}
+                               for n, c in scene.CONTAINERS.items() if n in sim.box}}
     if cmd == "sim_point":
         # Oracle pointer: the item's top-centre projected into the head image, with VLM-like pixel noise.
         n = r["item"]
         b = sim.items[n]
-        top = sim.d.xpos[b].copy()
-        top[2] += 0.004
+        top = sim.d.xpos[b] + sim.d.xmat[b].reshape(3, 3) @ sim.centre[n]
+        top[2] += sim.extent[n][2] / 2 - 0.002
         u, v = cam_project(top)
         rng = np.random.default_rng(r.get("seed"))
         nz = float(r.get("noise_px", 0))
@@ -505,8 +595,13 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--desk-top", type=float, default=scene.Desk.top_z, help="desk top z in the pelvis frame (m)")
     ap.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer window (watch it live)")
+    ap.add_argument("--items", default="big", choices=sorted(scene.ITEM_SETS), help="item set desks are drawn from")
+    ap.add_argument("--scene", default="sort", choices=["sort", "devices"], help="desk sorting, or switches/buttons")
+    ap.add_argument("--port-offset", type=int, default=0, help="add to every port (run several sims side by side)")
     a = ap.parse_args()
-    sim = Sim(a.speed, scene.Desk(top_z=a.desk_top))
+    global ARM_PORT, CFG_PORT, DEPTH_PORT, HTTP_PORT
+    ARM_PORT, CFG_PORT, DEPTH_PORT, HTTP_PORT = (p + a.port_offset for p in (ARM_PORT, CFG_PORT, DEPTH_PORT, HTTP_PORT))
+    sim = Sim(a.speed, scene.Desk(top_z=a.desk_top), a.items, a.scene)
     sim.reset(a.seed)
     if a.viewer:
         from mujoco import viewer as mj_viewer   # (a plain `import mujoco.viewer` here would shadow `mujoco` in main)

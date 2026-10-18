@@ -22,10 +22,19 @@ import scene  # noqa: E402
 ARM = scene.ARM
 SIDES = scene.SIDES
 
+# Natural working posture (shoulder pitch, roll, yaw, elbow, wrist roll, pitch, yaw): elbow down and close to the body,
+# forearm forward, wrist neutral. IK is pulled toward it in the null space so arms never "chicken-wing".
+NATURAL = {"left": np.array([-0.45, 0.15, 0.0, 1.25, 0.0, 0.0, 0.0]),
+           "right": np.array([-0.45, -0.15, 0.0, 1.25, 0.0, 0.0, 0.0])}
+# Resting pose for an idle arm: hanging by the side, elbow slightly bent (like the hanging pose, out of the way).
+REST = {"left": np.array([0.10, 0.20, 0.0, 0.90, 0.0, 0.0, 0.0]),
+        "right": np.array([0.10, -0.20, 0.0, 0.90, 0.0, 0.0, 0.0])}
+
 
 class Twin:
-    def __init__(self, desk_top_z: float = -0.06, seed: int = 0):
-        self.m = scene.build(scene.Desk(top_z=desk_top_z))
+    def __init__(self, desk_top_z: float = -0.06, seed: int = 0, kind: str = "sort"):
+        self.m = (scene.build(scene.Desk(top_z=desk_top_z), items={}, containers={}, devices=True) if kind == "devices"
+                  else scene.build(scene.Desk(top_z=desk_top_z)))
         self.d = mujoco.MjData(self.m)
         m = self.m
         self.qadr = {s: [m.joint(f"{s}_{j}_joint").qposadr[0] for j in ARM] for s in SIDES}
@@ -35,9 +44,12 @@ class Twin:
         self.arm_bodies = {s: {b for b in range(m.nbody) if m.body(b).name.startswith(s) and any(
             k in m.body(b).name for k in ("shoulder", "elbow", "wrist", "dex1"))} for s in SIDES}
         self.fingers = {s: {m.body(f"{s}_dex1_finger_link_{k}").id for k in (1, 2)} for s in SIDES}
-        self.containers = {m.body(f"{n}_model").id for n in scene.CONTAINERS}
-        self.items = {scene.item_body(m, n) for n in scene.ITEMS}
-        for n in scene.ITEMS:                   # items are ignored by the planner: no collisions, parked apart
+        self.containers = set() if kind == "devices" else {m.body(f"{n}_model").id for n in scene.CONTAINERS}
+        # devices are obstacles to plan around (they count like containers), items are ignored
+        if kind == "devices":
+            self.containers = {b for b in range(m.nbody) if any(m.body(b).name.startswith(n) for n in scene.DEVICES)}
+        self.items = set() if kind == "devices" else {scene.item_body(m, n) for n in scene.ITEMS}
+        for n in ([] if kind == "devices" else scene.ITEMS):   # items: no collisions, parked apart
             b = scene.item_body(m, n)
             qa = m.jnt_qposadr[m.body_jntadr[b]]
             self.d.qpos[qa:qa + 3] = [-2.0, 0.3 * list(scene.ITEMS).index(n), -2.0]
@@ -117,30 +129,37 @@ class Twin:
                 J, e = np.vstack([Jp, 0.3 * (np.cross(y, [0, 0, 1.0]) @ Jr)[None, :]]), np.concatenate([ep, [-0.3 * y[2]]])
             if np.linalg.norm(ep) < 3e-4 and np.linalg.norm(e[3:]) < 2e-3:
                 break
-            dq = J.T @ np.linalg.solve(J @ J.T + 1e-4 * np.eye(len(e)), e)
+            Jinv = J.T @ np.linalg.inv(J @ J.T + 1e-4 * np.eye(len(e)))
+            dq = Jinv @ e + (np.eye(7) - Jinv @ J) @ (0.08 * (NATURAL[side] - q))   # natural posture, null space
             q = np.clip(q + np.clip(dq, -0.15, 0.15), self.lim[side][:, 0] + 0.01, self.lim[side][:, 1] - 0.01)
         q14[sl] = q
         p, Rc = self.fk(side, q14)
         oe = float(np.linalg.norm(0.5 * sum(np.cross(Rc[:, i], R[:, i]) for i in range(3)))) if R is not None else abs(float(Rc[2, 1]))
         return q14, float(np.linalg.norm(tgt - p)), oe
 
-    def ik_goals(self, side, q14_now, target, R=None, n=6, contact_ok=()):
-        """Several collision-free IK solutions (different seeds), closest to the current pose first."""
+    def ik_goals(self, side, q14_now, target, R=None, n=4, contact_ok=()):
+        """Collision-free IK solutions, most natural first: seeded from the current pose, the natural posture and a
+        few elbow-down variants (random seeds only if none of those work). Ranked by distance from the natural
+        posture plus distance from where the arm is, so moves stay short and human-like."""
         sl = slice(0, 7) if side == "left" else slice(7, 14)
-        seeds = [q14_now.copy()]
-        for _ in range(n * 3):
-            s = q14_now.copy()
-            s[sl] = self.rng.uniform(self.lim[side][:, 0], self.lim[side][:, 1])
-            seeds.append(s)
-        goals = []
-        for s in seeds:
-            q, pe, oe = self.ik(side, s, target, R)
-            if pe < 4e-3 and oe < 0.08 and not self.collides(q, contact_ok):
-                if all(np.abs(q[sl] - g[sl]).max() > 0.2 for g in goals):
-                    goals.append(q)
-            if len(goals) >= n:
-                break
-        return sorted(goals, key=lambda g: np.linalg.norm(g[sl] - q14_now[sl]))
+        sgn = 1 if side == "left" else -1
+        templates = [q14_now[sl], NATURAL[side], NATURAL[side] + [0.3, 0.1 * sgn, 0, -0.3, 0, 0, 0],
+                     NATURAL[side] + [-0.3, 0.1 * sgn, 0, 0.2, 0, -0.4, 0], NATURAL[side] + [0, 0, 0.4 * sgn, 0, 0, 0, 0]]
+        def solve(seeds):
+            out = []
+            for t in seeds:
+                s0 = q14_now.copy()
+                s0[sl] = t
+                q, pe, oe = self.ik(side, s0, target, R)
+                if pe < 4e-3 and oe < 0.08 and not self.collides(q, contact_ok):
+                    if all(np.abs(q[sl] - g[sl]).max() > 0.15 for g in out):
+                        out.append(q)
+            return out
+        goals = solve(templates)
+        if not goals:
+            goals = solve([self.rng.uniform(self.lim[side][:, 0], self.lim[side][:, 1]) for _ in range(12)])
+        cost = lambda g: np.linalg.norm(g[sl] - NATURAL[side]) + 0.5 * np.linalg.norm(g[sl] - q14_now[sl])
+        return sorted(goals, key=cost)[:n]
 
     # ----- planning -----
     def rrt_connect(self, side, q_start, q_goal, contact_ok=(), step=0.15, iters=4000):
@@ -210,7 +229,7 @@ class Twin:
         return None
 
 
-def timed(path, max_joint_speed=0.8, dt=0.02, min_T=0.6):
+def timed(path, max_joint_speed=1.2, dt=0.02, min_T=0.5):
     """Waypoints -> one smooth trajectory: dense samples along the path with a single min-jerk speed profile over its
     whole length (accelerate once, flow through every waypoint without stopping, decelerate once).
     Returns (q list, times) for arm_server's `trajectory` command."""
