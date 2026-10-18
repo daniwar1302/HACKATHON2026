@@ -5,8 +5,8 @@ World frame = pelvis frame (x forward, y left, z up), the frame every waldo-arms
 tracked dynamically; each Dex1 finger is a force-limited position actuator (20 N, Unitree's spec), so grasps hold
 or slip by contact and friction, not by magic.
 
-Assets (fetch with fetch_assets.sh, not in git): assets/g1_description (Unitree URDF + meshes) and
-assets/gso_repo/models (Google Scanned Objects in MuJoCo format, kevinzakka/mujoco_scanned_objects).
+Robot model in git: robot_model/g1_description (Unitree's G1 + Dex1-1 URDF and its meshes). Objects (fetch with
+fetch_assets.sh, a public download): assets/gso_repo/models (Google Scanned Objects in MuJoCo format, kevinzakka/mujoco_scanned_objects).
 Pens, markers, pencil, eraser, sticky notes and sticker sheets are primitives with real dimensions and masses
 (Google Scanned Objects has none of them).
 """
@@ -21,7 +21,9 @@ import mujoco
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-URDF = HERE / "assets" / "g1_description" / "g1_29dof_mode_15_with_dex1_1.urdf"
+URDF = HERE / "robot_model" / "g1_description" / "g1_29dof_mode_15_with_dex1_1.urdf"     # vendored: just this model
+if not URDF.exists():
+    URDF = HERE / "assets" / "g1_description" / "g1_29dof_mode_15_with_dex1_1.urdf"
 GSO = HERE / "assets" / "gso_repo" / "models"
 sys.path.insert(0, str(HERE.parent / "waldo-arms"))
 import vision  # noqa: E402  (same URDF head-camera mount the real pipeline uses)

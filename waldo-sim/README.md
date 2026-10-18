@@ -1,5 +1,24 @@
 # waldo-sim
 
+## Setup (from a fresh clone, ~2 minutes)
+
+Needs [uv](https://docs.astral.sh/uv/), git, a desktop session for rendering (MuJoCo via GLFW), and for the Claude
+demos the `claude` CLI logged in; `ffmpeg` only to cut videos. The robot model is in the repo
+(`robot_model/g1_description`); the scanned objects are a public download:
+
+```sh
+./waldo-sim/fetch_assets.sh                       # Google Scanned Objects -> waldo-sim/assets/gso_repo (~20 MB)
+./waldo-sim/demo.sh cell                          # or it | rack | qa | returns | lab: sim + viewer + Claude, live
+```
+Run a sim on its own and drive it with the waldo-arms MCP server or the scripted agents:
+```sh
+cd waldo-sim
+MUJOCO_GL=glfw uv run --with mujoco --with pyzmq --with pillow --with numpy sim_server.py --scene cell --port-offset 900 --viewer
+uv run --with "mcp>=2.2" --with mujoco --with pyzmq --with numpy --with pillow agent_cell.py --rounds 3    # 9/9
+```
+Scenes: `cell` (machine tending + QC), `returns` (warehouse returns), `lab` (dev board + guarded machine), `devices`
+(IT desk), `rack` (datacenter), `tablet` (device QA), `sort` (desk clutter). Recorded runs: [`../media/g1-demos/`](../media/g1-demos/).
+
 The desk-sorting G1 in MuJoCo, **speaking the real robot's protocols**, so `waldo-arms`, agents, `point_to_xyz`,
 routines and VLMs run against it unchanged. Use it to make picking and sorting accurate before the robot.
 
@@ -62,15 +81,15 @@ Recordings if live isn't possible: `media/claude_runs_cell.gif`, `media/claude_r
 
 ## Recorded demos
 
-`media/demos/`: all six Claude runs recorded in the sim (720p room view + head camera, captions = the agent's own
+`../media/g1-demos/`: all six Claude runs recorded in the sim (720p room view + head camera, captions = the agent's own
 words and tool calls): `all_highlights.mp4` (2 min) plus `<demo>_highlights.mp4` and `<demo>_full.mp4` for `it`,
-`rack`, `qa`, `returns`, `lab`, `cell`. Uncut originals in `media/demos/raw/`: `<demo>_room.mp4` (720p room view)
+`rack`, `qa`, `returns`, `lab`, `cell`. Uncut originals in `../media/g1-demos/raw/`: `<demo>_room.mp4` (720p room view)
 and `<demo>_head.mp4` (robot head camera) at real-time speed, and `<demo>_agent.jsonl` (the agent's messages and tool
-results, timestamped). For editing, `media/demos/clips/`: clean (no captions) 720p room-view clips at 30 fps, one per
+results, timestamped). For editing, `../media/g1-demos/clips/`: clean (no captions) 720p room-view clips at 30 fps, one per
 robot action, each sped to ~5 s and named for the action and speed (`qa_02_tap_add_to_cart_4x.mp4`,
 `lab_04_guard_status_guarded_cycle_stop_5x.mp4`), plus `<demo>_whole_6x.mp4` for each whole run (`make_clips.py`,
 `--head` for the head camera). Re-record and re-cut: `./record_demos.sh [out_dir] [demos...]` then
-`python make_demo_videos.py <out_dir> media/demos` (pillow + ffmpeg). The sim now serves camera frames and depth
+`python make_demo_videos.py <out_dir> ../media/g1-demos` (pillow + ffmpeg). The sim now serves camera frames and depth
 from inside its physics loop, so recordings (and agents looking) see the arm while it moves.
 
 ## Scenes

@@ -17,9 +17,9 @@ arms only) and a MuJoCo digital twin of it that speaks the robot's real protocol
 Fixtured parts and taught moves are how production cells reach high reliability; the agent works above them, deciding,
 sensing, verifying and reacting.
 
-**Videos** ([`waldo-sim/media/demos/`](../waldo-sim/media/demos/)), all unscripted Claude runs in the MuJoCo sim, 720p
+**Videos** ([`media/g1-demos/`](../media/g1-demos/)), all unscripted Claude runs in the MuJoCo sim, 720p
 room view + the robot's head camera, captioned with the agent's own reasoning and tool calls as they happened:
-* [`all_highlights.mp4`](../waldo-sim/media/demos/all_highlights.mp4) (2 min): every demo's key actions and result.
+* [`all_highlights.mp4`](../media/g1-demos/all_highlights.mp4) (2 min): every demo's key actions and result.
 * per demo (`it`, `rack`, `qa`, `returns`, `lab`, `cell`): `<demo>_highlights.mp4` (8-31 s, each action at ~4-16x)
   and `<demo>_full.mp4` (3x, the whole run).
 

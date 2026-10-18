@@ -3,7 +3,7 @@
 moves the robot, sped so it runs ~5 s) plus each whole run at 6x. Room view (720p) by default, --head for the robot's
 head camera.
 
-  python make_clips.py ~/Videos/waldo-demos/raw media/demos/clips          (ffmpeg on PATH)
+  python make_clips.py ~/Videos/waldo-demos/raw ../media/g1-demos/clips          (ffmpeg on PATH)
 """
 import glob
 import json

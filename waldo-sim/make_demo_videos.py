@@ -3,7 +3,7 @@
 moments the robot acts, 2x), plus one reel of every highlight. Captions are the agent's own words and tool calls,
 at the moment they happened.
 
-  python make_demo_videos.py ~/Videos/waldo-demos/raw media/demos        (needs pillow; ffmpeg on PATH)
+  python make_demo_videos.py ~/Videos/waldo-demos/raw ../media/g1-demos        (needs pillow; ffmpeg on PATH)
 """
 import glob
 import json

@@ -1,11 +1,13 @@
 #!/bin/sh
-# Assets for waldo-sim (not in git: ~130 MB).
-#   assets/g1_description  Unitree's G1 + Dex1-1 URDF and meshes (the same model Michael's arm IK uses), from Waldo
-#   assets/gso_repo/models Google Scanned Objects in MuJoCo format (kevinzakka/mujoco_scanned_objects), sparse
+# Objects for waldo-sim: Google Scanned Objects in MuJoCo format (kevinzakka/mujoco_scanned_objects, a public sparse
+# clone, ~20 MB) into assets/gso_repo. The robot model is in git (robot_model/g1_description); set FETCH_FULL_G1=1 to
+# also rsync Unitree's whole g1_description from Waldo (needs access to Waldo).
 set -e
 cd "$(dirname "$0")"
 mkdir -p assets
-rsync -a ${WALDO_SSH:+-e "$WALDO_SSH"} waldo@100.120.182.66:soccerbot/assets/g1_description/ assets/g1_description/
+if [ -n "${FETCH_FULL_G1:-}" ]; then
+  rsync -a ${WALDO_SSH:+-e "$WALDO_SSH"} waldo@100.120.182.66:soccerbot/assets/g1_description/ assets/g1_description/
+fi
 if [ ! -d assets/gso_repo ]; then
   git clone -q --depth 1 --filter=blob:none --sparse https://github.com/kevinzakka/mujoco_scanned_objects.git assets/gso_repo
 fi
