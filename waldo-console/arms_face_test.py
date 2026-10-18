@@ -15,7 +15,7 @@ watchdogs. This client only picks targets and sequences the server's own command
 A heartbeat thread pings `state` every 0.5 s: the server freezes the arms if a client goes quiet ~2 s.
 
 Reach the server from the laptop with a tunnel through waldo:
-  ssh -i ~/.ssh/id_ed25519_waldo -N -L 5810:192.168.123.164:5810 waldo@100.120.182.66
+  ssh -i ~/.ssh/id_ed25519_lab -N -L 5810:robot.example:5810 operator@lab-pc.example
 Then:
   uv run --with pyzmq ~/HACKATHON2026/waldo-console/arms_face_test.py --dry   # solve + check only, no motion
   uv run --with pyzmq ~/HACKATHON2026/waldo-console/arms_face_test.py         # move

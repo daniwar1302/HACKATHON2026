@@ -9,32 +9,43 @@ wrong, stop, phone the operator, talk it through live while the cameras keep wat
 
 ## The flow
 
+Waldo runs three connected loops on the lab PC: act, watch, and ask for help.
+
+**1. Act on the task**
+
+```mermaid
+flowchart LR
+    task["Your task<br/>Lift the red cup"] --> brain["Brain<br/>Claude Opus 5.5"]
+    brain --> tools["Robot tools<br/>MCP"]
+    tools --> arm["Robot arm"]
 ```
-                                 ┌──────────────────────── WALDO (the lab PC) ────────────────────────┐
-                                 │                                                                    │
- you: "lift the red cup" ───────►│  BRAIN  (Claude Opus 5.5)                                          │
-                                 │   plans the task, step by step ───────► robot tools (MCP) ──► 🦾 arm
-                                 │   │  ▲              ▲                                              │
-                                 │   │  │ alerts       │ your instructions                            │
-                                 │   │  │              │                                              │
-                                 │   ▼  │       ┌──────┴──────┐                                       │
-                                 │  set_step    │  EVENT BUS  │◄──────────────┐                       │
-                                 │   │          └──────▲──────┘               │                       │
-                                 │   ▼                 │ "grip: slipping 0.86"│                       │
-  📷 room camera ───5 fps───────►│  WATCHER  ──► Jev (0.08 s/frame) ──► debounce (~0.6 s)             │
-                                 │                     │                      │                       │
-                                 │       critical? ────┴──► REFLEX STOP (no AI, ~50 ms)               │
-                                 │                                            │                       │
-                                 │  CALL BRIDGE ◄─────── call_requested ──────┘                       │
-                                 │   OpenAI Realtime voice  ◄── live camera alerts injected mid-call   │
-                                 │   tools: status · consult brain · give instruction · stop · hang up│
-                                 └──────┬─────────────────────────────────────────────────────────────┘
-                                        │ Inkbox (tunnel + phone line)
-                                        ▼
-                              📱 your phone: "The cup slipped twice. Handle or rim?"
-                                    you: "Handle, left hand."  ──► saved as a HINT
-                                                                    (next time: no call needed)
+
+The brain plans each step and tells the watcher what to check with `set_step`.
+
+**2. Watch the task and stop on critical alerts**
+
+```mermaid
+flowchart TD
+    camera["Room camera · 5 fps"] --> watcher["Watcher + Jev<br/>~0.08 s per frame"]
+    watcher --> debounce["Confirm across frames<br/>~0.6 s debounce"]
+    debounce --> bus["Event bus<br/>grip: slipping, confidence 0.86"]
+    bus -->|Alerts| brain["Brain replans"]
+    bus -->|Critical alert| stop["Reflex stop<br/>No AI decision · ~50 ms"]
+    stop --> arm["Stop the arm"]
 ```
+
+**3. Ask for help and remember the answer**
+
+```mermaid
+flowchart TD
+    bus["Event bus"] -->|call_requested + live camera alerts| bridge["Call bridge<br/>OpenAI Realtime voice"]
+    bridge <-->|Inkbox tunnel + phone line| phone["Your phone<br/>Handle or rim? — Handle, left hand."]
+    bridge -->|Your instruction, via the event bus| brain["Brain updates the plan"]
+    bridge -->|Save the answer| hints["Hint memory"]
+    hints -.->|Reuse on future tasks| brain
+```
+
+During the call, the voice agent can check status, consult the brain, pass instructions, stop the robot, or hang up. Camera alerts keep arriving while you talk.
 
 | t | What happens |
 |---|---|
@@ -88,12 +99,12 @@ need most of it.
 
 ## Running it
 
-Everything runs on Waldo. From your Mac:
+Everything runs on Waldo. Connection details are private: the `.example` hostnames and `operator` account below are placeholders. Obtain the real values from the lab administrator. From your Mac:
 
 ```sh
-ssh -t waldo@100.120.182.66 '~/HACKATHON2026/waldo-live/start.sh'      # bus, watcher, bridge, brain in one tmux window
-ssh waldo@100.120.182.66 'cd ~/HACKATHON2026/waldo-live && ./run.sh brain task "lift the red cup"'
-ssh waldo@100.120.182.66 '~/HACKATHON2026/waldo-live/stop.sh'
+ssh -t operator@lab-pc.example '~/HACKATHON2026/waldo-live/start.sh'      # bus, watcher, bridge, brain in one tmux window
+ssh operator@lab-pc.example 'cd ~/HACKATHON2026/waldo-live && ./run.sh brain task "lift the red cup"'
+ssh operator@lab-pc.example '~/HACKATHON2026/waldo-live/stop.sh'
 ```
 
 In tmux: click a pane to focus it, **Ctrl-b then d** to leave everything running. Details are in [`waldo-live/README.md`](waldo-live/README.md).
@@ -113,7 +124,7 @@ Arm mirroring and the dance engine: [`waldo-mirror/README.md`](waldo-mirror/READ
 |-------|-------|
 | Jev watcher | ✅ Live on the room webcam: 5 fps, 0.07–0.12 s per frame. Grip check needs tuning on recorded clips |
 | Event bus, start/stop scripts | ✅ Running on Waldo |
-| Call bridge | ✅ Built, tested with fakes; Inkbox tunnel `waldo-agent.inkboxwire.com` active, signing key set |
+| Call bridge | ✅ Built, tested with fakes; private Inkbox tunnel active (endpoint omitted), signing key set |
 | Phone calls | ✅ Test call to the operator worked (Inkbox shared iMessage line, transcript read back) |
 | **Phone commands (MVP)** | ✅ **Text "call me" → Waldo calls → "wave" → "Go ahead?" → "Yes" → the G1 waves** (~1 s from yes to motion) |
 | **Arm mirroring** | ✅ Live on the G1: phone camera → MediaPipe → Unitree IK → arms, at 0.8 rad/s with comfort limits and a clean release |
@@ -133,18 +144,20 @@ Keys live only on Waldo in `~/.waldo-ask/env` (mode 600). Never commit them: thi
 
 ## Connecting to Waldo
 
-1. Install [Tailscale](https://tailscale.com/download), sign in, and accept the invite for the machine `waldo-waldos`.
+The actual SSH address, account, tailnet device name, and tunnel URL are intentionally omitted. Configure your own deployment using the placeholders below.
+
+1. Install [Tailscale](https://tailscale.com/download), sign in, and accept the invite for the machine `lab-pc`.
 2. Open an SSH session that also forwards the camera stream:
 
    ```sh
-   ssh -L 8766:10.2.1.180:8766 waldo@100.120.182.66
+   ssh -L 8766:camera.example:8766 operator@lab-pc.example
    ```
 
-   Ask the team for the password.
+   Use credentials provided privately by the lab administrator.
 3. While that session is open, go to <http://localhost:8766/> to see the head camera and the room webcam.
 
 Closing the SSH session also cuts off the camera stream. If you can't connect, check that Tailscale says
-**Connected** and that `waldo-waldos` is in its machine list.
+**Connected** and that `lab-pc` is in its machine list.
 
 ## Safety
 

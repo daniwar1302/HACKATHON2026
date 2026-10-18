@@ -44,7 +44,7 @@ dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0}dt{color:va
 <main>
 <section><h2>Status</h2><dl id="st"><dt>state</dt><dd>loading…</dd></dl><div class="row" style="margin-top:10px"><button onclick="refresh()">Refresh</button></div></section>
 <section><h2>Camera</h2><img id="cam" alt="waldo webcam" src="http://localhost:8766/stream/waldo_webcam.mjpg"
- onerror="this.replaceWith(Object.assign(document.createElement('p'),{textContent:'No feed. Start the tunnel: ssh -L 8766:10.2.1.180:8766 waldo@100.120.182.66'}))"></section>
+ onerror="this.replaceWith(Object.assign(document.createElement('p'),{textContent:'No feed. Start the tunnel: ssh -L 8766:camera.example:8766 operator@lab-pc.example'}))"></section>
 <section><h2>Mode</h2><div class="row">
  <button onclick="act('set_mode',{mode:'stand'},'Stand powers ALL joints, legs included. Continue?')">Stand (fsm 4)</button>
  <button onclick="act('set_mode',{mode:'damp'})">Damp (fsm 1)</button>

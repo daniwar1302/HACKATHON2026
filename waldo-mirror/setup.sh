@@ -3,7 +3,7 @@
 # plus MediaPipe for pose tracking. numpy stays at the tv env's version so the IK keeps working.
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-TV=/home/waldo/miniconda3/envs/tv/bin/python
+TV="$HOME"/miniconda3/envs/tv/bin/python
 ~/.local/bin/uv venv --clear --python "$TV" --system-site-packages "$DIR/.venv"
 NUMPY=$("$TV" -c "import numpy; print(numpy.__version__)")
 ~/.local/bin/uv pip install --python "$DIR/.venv/bin/python" "numpy==$NUMPY" mediapipe yt-dlp pytest

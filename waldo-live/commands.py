@@ -4,7 +4,7 @@ Config is ~/.waldo/commands.json (copy commands.example.json). Only entries with
 "enabled": true are offered to the voice agent. "motion": true entries run only after
 the operator has said yes on the call (checked against the transcript, not the model).
 
-    {"servers": {"g1": {"command": "/home/waldo/HACKATHON2026/waldo-mcp/run.sh"}},
+    {"servers": {"g1": {"command": "/home/operator/HACKATHON2026/waldo-mcp/run.sh"}},
      "stop": "g1__stop",
      "commands": {"wave": {"description": "wave hello", "tool": "g1__gesture",
                            "args": {"name": "high wave"}, "motion": true, "enabled": true}}}

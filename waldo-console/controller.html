@@ -23,7 +23,7 @@ input[type=range]{width:100%}input[type=text]{flex:1;min-width:0;font:inherit;pa
 <header>
  <h1>Waldo · virtual XR controllers <span id="st" class="pill bad">disconnected</span></h1>
  <div class="row">
-  <input id="url" type="text" size="34" value="wss://100.120.182.66:8012">
+  <input id="url" type="text" size="34" value="wss://lab-pc.example:8012">
   <button id="conn">Connect</button>
   <button class="danger" id="damp" title="Both thumbsticks pressed in: teleop's soft emergency stop (damp)">DAMP</button>
  </div>
@@ -33,7 +33,7 @@ input[type=range]{width:100%}input[type=text]{flex:1;min-width:0;font:inherit;pa
  <img class="main" id="cam-main" alt="robot head camera" src="http://localhost:8766/stream/head_camera.mjpg">
  <img class="pip" id="cam-pip" alt="room webcam (click to swap)" title="click to swap views" src="http://localhost:8766/stream/waldo_webcam.mjpg">
  <span class="lbl" id="cam-lbl">head camera (robot's view)</span></div>
- <p class="hint" id="cam-hint" hidden>No camera feed. Open the tunnel: <code>ssh -i ~/.ssh/id_ed25519_waldo -N -L 8766:10.2.1.180:8766 waldo@100.120.182.66</code>.
+ <p class="hint" id="cam-hint" hidden>No camera feed. Open the tunnel: <code>ssh -i ~/.ssh/id_ed25519_lab -N -L 8766:camera.example:8766 operator@lab-pc.example</code>.
  Head feed frozen? On waldo: <code>systemctl --user restart g1-camera-viewer</code></p></section>
 <section class="wide"><h2>How this works</h2>
  <p class="hint" style="margin:0">This page stands in for a Quest/Pico. It streams <code>CONTROLLER_MOVE</code> at 30 Hz to teleop's websocket, the same as a headset does.

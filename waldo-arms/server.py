@@ -4,8 +4,8 @@
 arm_server (Jetson, ZMQ :5810) does the IK, self-collision and table path checks, workspace guard and watchdogs.
 This server only exposes its commands as agent tools, adds a table floor, and serves camera frames.
 
-Runs on Waldo (talks to 192.168.123.164:5810 directly) or on a laptop with tunnels:
-  ssh -N -L 5810:192.168.123.164:5810 -L 8766:10.2.1.180:8766 waldo@100.120.182.66
+Runs on Waldo (talks to robot.example:5810 directly) or on a laptop with tunnels:
+  ssh -N -L 5810:robot.example:5810 -L 8766:camera.example:8766 operator@lab-pc.example
   G1_ARM_ADDR=tcp://localhost:5810 G1_CAM_BASE=http://localhost:8766 G1_CAM_HOST=localhost \
     uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow server.py   (also tunnel 55556 + 60000)
 """
@@ -27,10 +27,10 @@ from mcp.server.mcpserver.utilities.types import Image
 
 import vision
 
-ADDR = os.environ.get("G1_ARM_ADDR", "tcp://192.168.123.164:5810")
-CAM = os.environ.get("G1_CAM_BASE", "http://10.2.1.180:8766")
+ADDR = os.environ.get("G1_ARM_ADDR", "tcp://robot.example:5810")
+CAM = os.environ.get("G1_CAM_BASE", "http://camera.example:8766")
 WS = {"x": (0.10, 0.60), "y": (-0.55, 0.55), "z": (-0.35, 0.45)}  # arm_server's pelvis-frame workspace (m)
-CAM_HOST = os.environ.get("G1_CAM_HOST", "192.168.123.164")   # the Jetson's teleimager (depth + camera config)
+CAM_HOST = os.environ.get("G1_CAM_HOST", "robot.example")   # the Jetson's teleimager (depth + camera config)
 DEPTH_PORT, CAMCFG_PORT = int(os.environ.get("G1_DEPTH_PORT", "55556")), int(os.environ.get("G1_CAMCFG_PORT", "60000"))
 # Head camera config as teleimager reported it on 2026-10-17 (used only if the live request fails).
 HEAD_FALLBACK = {"image_shape": [480, 640], "depth_scale": 0.001,

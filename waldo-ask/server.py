@@ -29,7 +29,7 @@ HOME = Path(os.environ.get("WALDO_ASK_HOME", Path.home() / ".waldo-ask"))
 CHANNEL = os.environ.get("WALDO_ASK_CHANNEL", "email")
 TO = os.environ.get("WALDO_ASK_TO", "")
 AGENT = os.environ.get("WALDO_ASK_IDENTITY", "waldo")
-CAMERA_URL = os.environ.get("WALDO_CAMERA_URL", "http://10.2.1.180:8766")
+CAMERA_URL = os.environ.get("WALDO_CAMERA_URL", "http://camera.example:8766")
 
 REUSE_SCORE = 0.5   # word overlap needed to answer from memory without asking
 POLL_SECONDS = 2.0

@@ -33,7 +33,7 @@ Settings live in `~/.waldo-ask/env` (mode 600, never in git):
 The brain's robot tools come from `~/.waldo/brain.json`:
 
 ```json
-{"servers": {"g1": {"command": "/home/waldo/HACKATHON2026/waldo-mcp/run.sh"}}, "stop_tool": "g1__stop"}
+{"servers": {"g1": {"command": "/home/operator/HACKATHON2026/waldo-mcp/run.sh"}}, "stop_tool": "g1__stop"}
 ```
 
 ## Run
@@ -80,7 +80,7 @@ If accuracy is poor, run the watcher with `--decider claude --fps 1`.
 
 - Jev on the room webcam: **0.07–0.12 s per frame**, steady at 5 fps, nothing firing on an idle bench.
   The grip check still needs tuning on real clips (it reads "secure ~0.7" with nothing happening).
-- Inkbox tunnel `waldo-agent.inkboxwire.com` is active; signing key created.
+- Private Inkbox tunnel is active (endpoint omitted); signing key created.
 - OpenAI Realtime: key valid, `gpt-realtime-2.1` available, but the account has **no credits**.
 
 ## Safety

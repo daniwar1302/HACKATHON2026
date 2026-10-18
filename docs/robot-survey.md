@@ -7,9 +7,9 @@
 
 | Interface | Address | Purpose |
 |-----------|---------|---------|
-| `enp5s0` | 192.168.123.222 | Ethernet to the G1 (robot answers at 192.168.123.161 / .164); DDS goes here |
-| `wlp6s0` | 10.2.1.180 | Wi-Fi LAN; camera viewer binds here |
-| `tailscale0` | 100.120.182.66 | how we reach it |
+| `enp5s0` | lab-pc-lan.example | Ethernet to the G1 (robot answers at robot-controller.example / robot.example); DDS goes here |
+| `wlp6s0` | camera.example | Wi-Fi LAN; camera viewer binds here |
+| `tailscale0` | lab-pc.example | how we reach it |
 
 ## Control stack already on the box
 
@@ -25,7 +25,7 @@
   - backends: `mock` (no hardware), `unitree` (DDS), `remote` (HTTP)
 - **`~/stand.py`**: puts the robot into balance stand (FSM 0 → 1 → 4 → 500).
 - **`~/killswitch.py`**: kills behaviour scripts, releases the arms, then StopMove and balance stand (`--damp` lets it go limp).
-- **Cameras** (`~/g1-camera-viewer`, port 8766 on 10.2.1.180):
+- **Cameras** (`~/g1-camera-viewer`, port 8766 on camera.example):
   - `GET /api/cameras`, `GET /frame/<id>.jpg`, `GET /stream/<id>.mjpg`
   - ids: `head_camera` (G1 head, live), `waldo_webcam` (room C920, live), `waldo_realsense` (unplugged)
 - `~/mission-robotics`: agent plugins for this bay (WidowX arms are ready; the G1 plugin is still empty).

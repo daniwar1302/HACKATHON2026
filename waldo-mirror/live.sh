@@ -16,10 +16,11 @@ case "${1:-}" in
   check)
     cd /tmp && "$HOME/HACKATHON2026/waldo-live/.venv/bin/python" - <<'EOF' 2>/dev/null
 import asyncio
+import os
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 async def main():
-    async with stdio_client(StdioServerParameters(command="/home/waldo/HACKATHON2026/waldo-mcp/run.sh")) as (r, w):
+    async with stdio_client(StdioServerParameters(command=os.path.expanduser("~/HACKATHON2026/waldo-mcp/run.sh"))) as (r, w):
         async with ClientSession(r, w) as s:
             await s.initialize()
             print("robot:", (await s.call_tool("get_state", {})).content[0].text.replace("\n", " "))

@@ -4,7 +4,7 @@
     python brain.py task "lift the red cup"    start a task on a running brain
 
 Robot servers come from ~/.waldo/brain.json:
-    {"servers": {"g1": {"command": "/home/waldo/HACKATHON2026/waldo-mcp/run.sh"}}, "stop_tool": "g1__stop"}
+    {"servers": {"g1": {"command": "/home/operator/HACKATHON2026/waldo-mcp/run.sh"}}, "stop_tool": "g1__stop"}
 
 Between model calls the loop drains the bus. Watcher failures and operator instructions
 arrive as mid-conversation system messages; a critical failure or a stop request calls the

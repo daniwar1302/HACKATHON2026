@@ -27,10 +27,10 @@ git clone https://github.com/daniwar1302/HACKATHON2026.git ~/HACKATHON2026
 
 To update later: `git -C ~/HACKATHON2026 pull`.
 
-On your Mac (needs SSH key login to Waldo, e.g. `ssh-copy-id waldo@100.120.182.66`):
+On your Mac (needs SSH key login to Waldo, e.g. `ssh-copy-id operator@lab-pc.example`):
 
 ```sh
-claude mcp add waldo -- ssh waldo@100.120.182.66 /home/waldo/HACKATHON2026/waldo-mcp/run.sh
+claude mcp add waldo -- ssh operator@lab-pc.example /home/operator/HACKATHON2026/waldo-mcp/run.sh
 ```
 
 Then ask Claude Code something like "check Waldo's state and show me the room camera." Claude Code asks you

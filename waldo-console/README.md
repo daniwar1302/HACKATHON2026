@@ -10,7 +10,7 @@ reaches the robot over SSH, Tailscale and the camera tunnel.
 | `g1_mcp.py` | MCP server with the same tools for agents: `status set_mode gesture wave_hand say set_led set_volume stop`. Each tool is one allow-listed `unitree_sdk2py` call over SSH, with argument caps and a `G1_DRY_RUN=1` rehearsal mode. Robot commands queue on a lock on Waldo so several sessions can share the robot; `stop` skips the queue. Overlaps [`waldo-mcp`](../waldo-mcp/) on state/gestures/stop; adds speech, LED, volume and the queue. |
 | `arms_face_test.py` | Client for Michael's `arm_server.py` (Jetson :5810): picks the highest face-height pose that both solves IK and passes the collision check, enables, moves both hands up, holds, returns, releases. `--dry` only solves and checks. |
 
-Needs: `uv`, an SSH key on Waldo (`ssh-copy-id -i ~/.ssh/id_ed25519_waldo waldo@100.120.182.66`), Tailscale on
+Needs: `uv`, an SSH key on Waldo (`ssh-copy-id -i ~/.ssh/id_ed25519_lab operator@lab-pc.example`), Tailscale on
 Michael's tailnet. Full startup steps: [`docs/quickstart.md`](../docs/quickstart.md). Every arm command and the
 teleop controller map: [`docs/g1-arm-commands.md`](../docs/g1-arm-commands.md).
 
@@ -20,5 +20,5 @@ claude mcp add g1-console -- uv run --with "mcp>=2.2" ~/HACKATHON2026/waldo-cons
 uv run --with pyzmq waldo-console/arms_face_test.py --dry                 # needs arm_server + tunnel
 ```
 
-Env overrides: `G1_HOST` (waldo@100.120.182.66), `G1_KEY` (~/.ssh/id_ed25519_waldo), `G1_PY` (Waldo's unitree
+Env overrides: `G1_HOST` (operator@lab-pc.example), `G1_KEY` (~/.ssh/id_ed25519_lab), `G1_PY` (Waldo's unitree
 conda python), `G1_IFACE` (enp5s0), `G1_UI_PORT` (8780), `G1_DRY_RUN=1`.

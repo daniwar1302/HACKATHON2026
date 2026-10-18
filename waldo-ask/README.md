@@ -57,7 +57,7 @@ Create it in the Inkbox Console, or with `Inkbox().create_identity("waldo")`.
 Register it with Claude Code on Waldo:
 
 ```sh
-claude mcp add waldo-ask -- /home/waldo/HACKATHON2026/waldo-ask/run.sh
+claude mcp add waldo-ask -- /home/operator/HACKATHON2026/waldo-ask/run.sh
 ```
 
 Hints live in `~/.waldo-ask/hints.json` on Waldo, not in git.

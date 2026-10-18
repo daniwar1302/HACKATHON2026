@@ -90,8 +90,8 @@ def files():
 
 check("arm_server + FSM", arm_state, "start arm_server on the Jetson; FSM 0 -> 1 -> 4 -> 500 (quickstart.md 3); ssh -L 5810")
 check("head camera", camera, "open the 8766 tunnel; if stalled: systemctl --user restart g1-camera-viewer on waldo")
-check("camera config", cam_config, "ssh -L 60000:192.168.123.164:60000 (teleimager config)")
-check("depth stream", depth, "ssh -L 55556:192.168.123.164:55556; teleimager running with depth on the Jetson")
+check("camera config", cam_config, "ssh -L 60000:robot.example:60000 (teleimager config)")
+check("depth stream", depth, "ssh -L 55556:robot.example:55556; teleimager running with depth on the Jetson")
 check("desk height via depth", desk_height, "check the camera mount / waist angles; look's L/R dots must sit on the grippers")
 check("planner twin", twin, "./waldo-sim/fetch_assets.sh")
 check("taught / registered files", files, "teach and register the cell (docs/real-cell-bringup.md)")

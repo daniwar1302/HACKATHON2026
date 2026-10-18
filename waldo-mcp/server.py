@@ -16,7 +16,7 @@ import urllib.request
 from mcp.server.fastmcp import FastMCP, Image
 
 IFACE = os.environ.get("WALDO_IFACE", "enp5s0")
-CAMERA_URL = os.environ.get("WALDO_CAMERA_URL", "http://10.2.1.180:8766")
+CAMERA_URL = os.environ.get("WALDO_CAMERA_URL", "http://camera.example:8766")
 PHONE_CAMERA_URL = os.environ.get("WALDO_PHONE_CAMERA_URL", "http://127.0.0.1:8773")  # served by waldo-live's bridge
 CAMERAS = ("head_camera", "waldo_webcam", "phone")
 

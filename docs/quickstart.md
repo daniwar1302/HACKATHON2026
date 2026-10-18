@@ -8,20 +8,22 @@ The robot hangs in its gantry. **No walking** (site rule). Waldo is shared, so c
 
 ## 1. Get access (once)
 
-1. **Tailscale:** accept Michael's tailnet invite, then `sudo tailscale up` (or `sudo tailscale login` and pick his tailnet).
-   `tailscale status` should list `waldo-waldos` (100.120.182.66).
-2. **SSH key:** `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_waldo` then `ssh-copy-id -i ~/.ssh/id_ed25519_waldo.pub waldo@100.120.182.66`.
-3. **Robot Jetson** (from Waldo): `ssh unitree@192.168.123.164`. Press **Enter** at the `ros:foxy(1) noetic(2) ?` prompt.
+All `.example` hostnames, `operator` accounts (including `/home/operator` paths), and `lab-pc` device names are placeholders. Request connection details privately from your lab administrator. Set `G1_HOST`, `G1_KEY`, `G1_ARM_ADDR`, `G1_CAM_BASE`, `G1_CAM_HOST`, and `WALDO_CAMERA_URL` for your deployment; the public defaults do not point to live hardware. Enter your own WebSocket endpoint in the browser controller. For optional full robot assets, set `WALDO_HOST` before running `FETCH_FULL_G1=1 ./fetch_assets.sh`.
+
+1. **Tailscale:** accept your lab administrator's tailnet invite, then `sudo tailscale up` (or `sudo tailscale login` and pick the approved tailnet).
+   `tailscale status` should list `lab-pc` (lab-pc.example).
+2. **SSH key:** `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_lab` then `ssh-copy-id -i ~/.ssh/id_ed25519_lab.pub operator@lab-pc.example`.
+3. **Robot Jetson** (from Waldo): `ssh operator@robot.example`. Press **Enter** at the `ros:foxy(1) noetic(2) ?` prompt.
 
 | Machine | Address | Python for the Unitree SDK |
 |---|---|---|
-| Waldo (lab PC) | 100.120.182.66 (Tailscale), 10.2.1.180 (Wi-Fi), 192.168.123.222 (robot LAN, `enp5s0`) | `~/miniconda3/envs/unitree/bin/python` |
-| G1 Jetson | 192.168.123.164 | `~/miniconda3/envs/tv/bin/python` |
+| Waldo (lab PC) | lab-pc.example (Tailscale), camera.example (Wi-Fi), lab-pc-lan.example (robot LAN, `enp5s0`) | `~/miniconda3/envs/unitree/bin/python` |
+| G1 Jetson | robot.example | `~/miniconda3/envs/tv/bin/python` |
 
 ## 2. See the robot
 
 ```sh
-ssh -i ~/.ssh/id_ed25519_waldo -N -L 8766:10.2.1.180:8766 waldo@100.120.182.66
+ssh -i ~/.ssh/id_ed25519_lab -N -L 8766:camera.example:8766 operator@lab-pc.example
 ```
 Open http://localhost:8766: **head camera** (the G1's only camera, a fixed RealSense D435i) plus the room webcam.
 Head feed says *stalled*? On Waldo: `systemctl --user restart g1-camera-viewer`.
@@ -45,15 +47,15 @@ Only **one** arm controller at a time: teleop, `arm_server`, and gesture tools a
 
 ### A. Phone / agent loop: `waldo-live` + `waldo-ask` + `waldo-mcp`
 ```sh
-ssh -t waldo@100.120.182.66 '~/HACKATHON2026/waldo-live/start.sh'     # bus, watcher, bridge, brain in tmux
-ssh waldo@100.120.182.66 'cd ~/HACKATHON2026/waldo-live && ./run.sh brain task "lift the red cup"'
+ssh -t operator@lab-pc.example '~/HACKATHON2026/waldo-live/start.sh'     # bus, watcher, bridge, brain in tmux
+ssh operator@lab-pc.example 'cd ~/HACKATHON2026/waldo-live && ./run.sh brain task "lift the red cup"'
 ```
 Text **`call me`** to Waldo's iMessage line for phone command mode ("wave" → "go ahead?" → "yes").
 Keys and settings: [`waldo-live/README.md`](../waldo-live/README.md).
 
 ### B. Claude Code with robot tools
 ```sh
-claude mcp add waldo -- ssh waldo@100.120.182.66 /home/waldo/HACKATHON2026/waldo-mcp/run.sh       # state, look, stand_up, gesture, stop, damp
+claude mcp add waldo -- ssh operator@lab-pc.example /home/operator/HACKATHON2026/waldo-mcp/run.sh       # state, look, stand_up, gesture, stop, damp
 claude mcp add g1-console -- uv run --with "mcp>=2.2" ~/HACKATHON2026/waldo-console/g1_mcp.py     # + say, LED, volume, queue
 ```
 
@@ -74,14 +76,14 @@ Teaching a real desk's devices and handing them to agents: [`real-cell-bringup.m
 1. Robot in **500**, `arm_server` **not** running.
 2. On Waldo:
    ```sh
-   cd ~/xr_teleoperate/teleop && CYCLONEDDS_HOME=/home/waldo/cyclonedds/install LD_LIBRARY_PATH=/home/waldo/cyclonedds/install/lib \
+   cd ~/xr_teleoperate/teleop && CYCLONEDDS_HOME=/home/operator/cyclonedds/install LD_LIBRARY_PATH=/home/operator/cyclonedds/install/lib \
      ~/miniconda3/envs/tv/bin/python teleop_hand_and_arm.py --input-mode=controller --arm=G1_29 --ee=dex1 \
-     --img-server-ip=192.168.123.164 --network-interface=enp5s0 --frequency=30 --motion
+     --img-server-ip=robot.example --network-interface=enp5s0 --frequency=30 --motion
    ```
    (add `--record --task-dir ~/datasets --task-name <name> --task-goal "<goal>"` to record demos)
 3. **Controller**, pick one:
-   * **Headset** (Quest/Pico): browser to `https://10.2.1.180:8012/?ws=wss://10.2.1.180:8012`, accept the certificate, tap Virtual Reality. **Keep off the thumbsticks** (they walk).
-   * **Browser:** open https://100.120.182.66:8012 once and accept the certificate, then http://localhost:8780/controller (console from C running) → **Connect**. It streams the neutral pose.
+   * **Headset** (Quest/Pico): browser to `https://camera.example:8012/?ws=wss://camera.example:8012`, accept the certificate, tap Virtual Reality. **Keep off the thumbsticks** (they walk).
+   * **Browser:** open https://lab-pc.example:8012 once and accept the certificate, then http://localhost:8780/controller (console from C running) → **Connect**. It streams the neutral pose.
 4. Focus the teleop terminal and press **`r`**. The log must print `🚀start Tracking🚀`; the hands glide to the neutral pose
    (25 cm forward, 8 cm up), then follow the controller.
 5. Browser keys: `1`/`2` hand · `W/S` `A/D` `R/F` move 2 cm · `Q/E` `T/G` wrist · hold `Space` close gripper · `H` home · **`Esc` = DAMP**.
@@ -94,7 +96,7 @@ Teaching a real desk's devices and handing them to agents: [`real-cell-bringup.m
    cd ~/g1-grasp && CYCLONEDDS_HOME=/home/unitree/cyclonedds_ws/install/cyclonedds LD_LIBRARY_PATH=/home/unitree/cyclonedds_ws/install/cyclonedds/lib \
      ~/miniconda3/envs/tv/bin/python -u arm_server.py           # wait for: ready on :5810
    ```
-3. On the laptop: `ssh -i ~/.ssh/id_ed25519_waldo -N -L 5810:192.168.123.164:5810 waldo@100.120.182.66`, then
+3. On the laptop: `ssh -i ~/.ssh/id_ed25519_lab -N -L 5810:robot.example:5810 operator@lab-pc.example`, then
    `uv run --with pyzmq ~/HACKATHON2026/waldo-console/arms_face_test.py --dry` (no motion), then without `--dry`.
 4. Every command (`move_ee`, `ik`, `check`, `grasp`, …): [`g1-arm-commands.md`](g1-arm-commands.md).
    Finish with `release` **before** Ctrl+C: Ctrl+C freezes the arms where they are.

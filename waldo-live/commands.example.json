@@ -1,21 +1,21 @@
 {
   "servers": {
     "g1": {
-      "command": "/home/waldo/HACKATHON2026/waldo-mcp/run.sh"
+      "command": "/home/operator/HACKATHON2026/waldo-mcp/run.sh"
     },
     "widowx": {
-      "command": "/home/waldo/.local/bin/uv",
+      "command": "/home/operator/.local/bin/uv",
       "args": [
         "run",
         "--project",
-        "/home/waldo/mission-robotics/.claude/worktrees/widowx-mcp-server-nu3kui/plugins/widowx",
+        "/home/operator/widowx",
         "--with",
         "mcp>=2.2",
         "python",
-        "/home/waldo/mission-robotics/.claude/worktrees/widowx-mcp-server-nu3kui/plugins/widowx/mcp/server.py"
+        "/home/operator/widowx/mcp/server.py"
       ],
       "env": {
-        "PATH": "/home/waldo/.local/bin:/usr/local/bin:/usr/bin:/bin"
+        "PATH": "/home/operator/.local/bin:/usr/local/bin:/usr/bin:/bin"
       }
     }
   },

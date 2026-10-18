@@ -8,7 +8,7 @@ Unitree's own commands (FSM modes, gestures, WaveHand, TTS, LED).
   claude mcp add g1 -- uv run --with "mcp>=2.2" ~/HACKATHON2026/waldo-console/g1_mcp.py
   G1_DRY_RUN=1 ...   # every tool returns the SDK calls it WOULD make, robot untouched
 
-Env: G1_HOST (waldo@100.120.182.66), G1_KEY (~/.ssh/id_ed25519_waldo),
+Env: G1_HOST (operator@lab-pc.example), G1_KEY (~/.ssh/id_ed25519_lab),
      G1_PY (waldo's unitree conda python), G1_IFACE (enp5s0).
 """
 import json
@@ -20,8 +20,8 @@ from typing import Literal
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError  # message reaches the agent; plain exceptions don't
 
-HOST = os.environ.get("G1_HOST", "waldo@100.120.182.66")
-KEY = os.path.expanduser(os.environ.get("G1_KEY", "~/.ssh/id_ed25519_waldo"))
+HOST = os.environ.get("G1_HOST", "operator@lab-pc.example")
+KEY = os.path.expanduser(os.environ.get("G1_KEY", "~/.ssh/id_ed25519_lab"))
 PY = os.environ.get("G1_PY", "~/miniconda3/envs/unitree/bin/python")
 IFACE = os.environ.get("G1_IFACE", "enp5s0")
 DRY = os.environ.get("G1_DRY_RUN") == "1"

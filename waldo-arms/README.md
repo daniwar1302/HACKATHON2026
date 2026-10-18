@@ -56,18 +56,18 @@ Needs the robot in FSM 500/501/801, `arm_server.py` running on the Jetson, and *
 
 On Waldo (reaches the Jetson and cameras directly):
 ```sh
-claude mcp add waldo-arms -- ssh waldo@100.120.182.66 'cd ~/HACKATHON2026/waldo-arms && ~/.local/bin/uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow server.py'
+claude mcp add waldo-arms -- ssh operator@lab-pc.example 'cd ~/HACKATHON2026/waldo-arms && ~/.local/bin/uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow server.py'
 ```
 From a laptop with tunnels:
 ```sh
-ssh -i ~/.ssh/id_ed25519_waldo -N -L 5810:192.168.123.164:5810 -L 8766:10.2.1.180:8766 \
-  -L 55556:192.168.123.164:55556 -L 60000:192.168.123.164:60000 waldo@100.120.182.66
+ssh -i ~/.ssh/id_ed25519_lab -N -L 5810:robot.example:5810 -L 8766:camera.example:8766 \
+  -L 55556:robot.example:55556 -L 60000:robot.example:60000 operator@lab-pc.example
 claude mcp add waldo-arms -e G1_ARM_ADDR=tcp://localhost:5810 -e G1_CAM_BASE=http://localhost:8766 -e G1_CAM_HOST=localhost \
   -- uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow ~/HACKATHON2026/waldo-arms/server.py
 ```
 For the brain (`waldo-live`), add it to `~/.waldo/brain.json` next to `g1`:
 ```json
-"arms": {"command": "/home/waldo/.local/bin/uv", "args": ["run", "--with", "mcp>=2.2", "--with", "pyzmq", "--with", "numpy", "--with", "pillow", "/home/waldo/HACKATHON2026/waldo-arms/server.py"]}
+"arms": {"command": "/home/operator/.local/bin/uv", "args": ["run", "--with", "mcp>=2.2", "--with", "pyzmq", "--with", "numpy", "--with", "pillow", "/home/operator/HACKATHON2026/waldo-arms/server.py"]}
 ```
 
 A task then reads: `look` → decide a target → `check_reach` → `move_hand` (steps of ≤ 15 cm) → `look` →

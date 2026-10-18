@@ -9,8 +9,8 @@ first motion with a hand near STOP.
 2. `arm_server` on the Jetson ([quickstart](quickstart.md) §E steps 1–2): wait for `ready on :5810`.
 3. Laptop tunnels (arm, depth, camera config, camera viewer):
    ```sh
-   ssh -i ~/.ssh/id_ed25519_waldo -N -L 5810:192.168.123.164:5810 -L 55556:192.168.123.164:55556 \
-       -L 60000:192.168.123.164:60000 -L 8766:localhost:8766 waldo@100.120.182.66
+   ssh -i ~/.ssh/id_ed25519_lab -N -L 5810:robot.example:5810 -L 55556:robot.example:55556 \
+       -L 60000:robot.example:60000 -L 8766:localhost:8766 operator@lab-pc.example
    ```
 4. MCP server on the laptop (needs `waldo-sim/fetch_assets.sh` once: the planner's twin uses the URDF):
    ```sh

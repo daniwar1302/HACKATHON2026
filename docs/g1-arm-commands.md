@@ -9,13 +9,13 @@ Checked against the code on the robot on 2026-10-17.
 
 | Machine | Address | Notes |
 |---|---|---|
-| **waldo** (base PC on the robot's LAN) | Tailscale `100.120.182.66`, robot LAN `192.168.123.222`, Wi-Fi `10.2.1.180` | user `waldo`. Unitree Python: `~/miniconda3/envs/unitree/bin/python` (miniconda base is broken for the SDK) |
-| **Robot Jetson** (Orin NX, inside the G1) | `192.168.123.164`, reach it from waldo | user `unitree`. On login it asks `ros:foxy(1) noetic(2) ?`: press **Enter** to skip |
+| **waldo** (base PC on the robot's LAN) | Tailscale `lab-pc.example`, robot LAN `lab-pc-lan.example`, Wi-Fi `camera.example` | user `operator` (placeholder). Unitree Python: `~/miniconda3/envs/unitree/bin/python` (miniconda base is broken for the SDK) |
+| **Robot Jetson** (Orin NX, inside the G1) | `robot.example`, reach it from waldo | user `unitree`. On login it asks `ros:foxy(1) noetic(2) ?`: press **Enter** to skip |
 | DDS network interface on waldo | `enp5s0` | pass to every SDK call |
 
 ```bash
-ssh waldo@100.120.182.66        # from anywhere on the tailnet
-ssh unitree@192.168.123.164     # from waldo
+ssh operator@lab-pc.example        # from anywhere on the tailnet
+ssh operator@robot.example     # from waldo
 ```
 
 ## 1. Robot modes (FSM): read this first
@@ -71,7 +71,7 @@ has the arms.
 From a laptop, tunnel through waldo:
 
 ```bash
-ssh -N -L 5810:192.168.123.164:5810 waldo@100.120.182.66
+ssh -N -L 5810:robot.example:5810 operator@lab-pc.example
 ```
 
 ```python
@@ -159,15 +159,15 @@ It's the same controller the server wraps. Use the server unless you're editing 
 Robot in FSM 500, `arm_server` **not** running. On waldo:
 
 ```bash
-cd ~/xr_teleoperate/teleop && CYCLONEDDS_HOME=/home/waldo/cyclonedds/install \
-  LD_LIBRARY_PATH=/home/waldo/cyclonedds/install/lib ~/miniconda3/envs/tv/bin/python teleop_hand_and_arm.py \
-  --input-mode=controller --arm=G1_29 --ee=dex1 --img-server-ip=192.168.123.164 \
+cd ~/xr_teleoperate/teleop && CYCLONEDDS_HOME=/home/operator/cyclonedds/install \
+  LD_LIBRARY_PATH=/home/operator/cyclonedds/install/lib ~/miniconda3/envs/tv/bin/python teleop_hand_and_arm.py \
+  --input-mode=controller --arm=G1_29 --ee=dex1 --img-server-ip=robot.example \
   --network-interface=enp5s0 --frequency=30 --motion
 # record demos: add  --record --task-dir ~/datasets --task-name <name> --task-goal "<goal>"
 ```
 
 Headset browser (Quest / Pico / Vision Pro), accept the self-signed certificate, tap **Virtual Reality**:
-`https://10.2.1.180:8012/?ws=wss://10.2.1.180:8012` (robot site) or `https://100.120.182.66:8012/?ws=wss://100.120.182.66:8012` (Tailscale).
+`https://camera.example:8012/?ws=wss://camera.example:8012` (robot site) or `https://lab-pc.example:8012/?ws=wss://lab-pc.example:8012` (Tailscale).
 A desktop browser at the same URL shows the head-camera view, but it can't drive the arms.
 
 **Keyboard** (in the teleop terminal): `r` start following, `s` start/stop recording, `q` quit.
@@ -200,7 +200,7 @@ sessions can share the robot; `stop` skips the queue.
 * **Head:** RealSense D435i (serial 243722075296), the robot's only camera, fixed (the G1 has no neck motors).
   Served by `teleimager` on the Jetson (ZMQ 55555 RGB, 55556 depth). **No wrist cameras on these hands.**
 * **Room:** Logitech C920 on waldo.
-* Viewer: `http://<waldo 10.2.1.180>:8766/` or tunnel `ssh -L 8766:10.2.1.180:8766 waldo@100.120.182.66`.
+* Viewer: `http://camera.example:8766/` or tunnel `ssh -L 8766:camera.example:8766 operator@lab-pc.example`.
   If the head feed says *stalled*, the Jetson's camera server restarted; on waldo run `systemctl --user restart g1-camera-viewer`.
 
 ## 6. Stopping things (in order of force)

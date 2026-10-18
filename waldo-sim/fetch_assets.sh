@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")"
 mkdir -p assets
 if [ -n "${FETCH_FULL_G1:-}" ]; then
-  rsync -a ${WALDO_SSH:+-e "$WALDO_SSH"} waldo@100.120.182.66:soccerbot/assets/g1_description/ assets/g1_description/
+  rsync -a ${WALDO_SSH:+-e "$WALDO_SSH"} "${WALDO_HOST:?Set WALDO_HOST to your SSH account and host}:soccerbot/assets/g1_description/" assets/g1_description/
 fi
 if [ ! -d assets/gso_repo ]; then
   git clone -q --depth 1 --filter=blob:none --sparse https://github.com/kevinzakka/mujoco_scanned_objects.git assets/gso_repo

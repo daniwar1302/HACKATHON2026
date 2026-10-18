@@ -23,7 +23,7 @@ import sys
 import time
 import urllib.request
 
-CAM = os.environ.get("G1_CAM_BASE", "http://10.2.1.180:8766")
+CAM = os.environ.get("G1_CAM_BASE", "http://camera.example:8766")
 MODEL = os.environ.get("G1_VLM", "") or (sorted(glob.glob(os.path.expanduser(
     "~/.cache/huggingface/hub/models--nvidia--Cosmos-Reason2-2B/snapshots/*/")))[-1:] or ["nvidia/Cosmos-Reason2-2B"])[0]
 
