@@ -2,11 +2,16 @@
 """Pretty-print `claude -p --output-format stream-json` live: the agent's words and every robot tool call, for a
 demo audience. Reads stdin."""
 import json
+import os
 import sys
 import time
 
 t0 = time.time()
+log = open(os.environ["AGENT_LOG"], "a") if os.environ.get("AGENT_LOG") else None   # timestamped raw events (video captions)
 for line in sys.stdin:
+    if log:
+        log.write(f"{time.time():.2f}\t{line}")
+        log.flush()
     try:
         d = json.loads(line)
     except ValueError:
