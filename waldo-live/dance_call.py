@@ -20,7 +20,9 @@ import time
 
 from beats import BeatTracker
 
-GO = re.compile(r"\bgo,?\s+waldo\b", re.I)
+# "go Waldo" as phone transcription actually hears it over music: "go well", "go wall", "go world",
+# "go Walter"... or a lone "go". Not "let's go" or "go go go" (lyrics).
+GO = re.compile(r"^\W*(?:ok(?:ay)?\W+)?go\W*$|(?<!let's )(?<!lets )\bgo\b[\s,!.]*(?:wal|wel|wol|wor|wad|val|vol|bal)\w*", re.I)
 STOP = re.compile(r"\b(stop|enough|wait|pause|that'?s it)\b", re.I)
 STEADY_ESTIMATES = 3          # confident tempo readings in a row before asking to dance
 MIN_CONFIDENCE = 0.2

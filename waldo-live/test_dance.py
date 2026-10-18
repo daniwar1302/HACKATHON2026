@@ -97,6 +97,22 @@ async def test_lyrics_saying_yes_do_not_start_the_dance_but_go_waldo_does():
     assert d.state == "starting" and published[-1]["type"] == "dance_start"
 
 
+@pytest.mark.parametrize("heard", ["Go well, though.", "go wall", "Go, Walter!", "go world", "Go Waldo.", "Go.", "okay go"])
+async def test_go_waldo_as_transcription_hears_it(heard):
+    d, s, published = make()
+    d.state = "confirming"
+    await d.on_transcript("remote", heard)
+    assert published and published[-1]["type"] == "dance_start", heard
+
+
+@pytest.mark.parametrize("lyric", ["let's go", "go go go", "yeah yeah", "here we go again tonight", "I gotta go"])
+async def test_lyrics_with_go_do_not_start(lyric):
+    d, s, published = make()
+    d.state = "confirming"
+    await d.on_transcript("remote", lyric)
+    assert d.state == "confirming", lyric
+
+
 async def test_texted_go_starts_and_texted_stop_stops():
     d, s, published = make()
     d.state = "confirming"
