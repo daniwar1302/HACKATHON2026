@@ -169,7 +169,8 @@ class ArmSdk:
         self.msg.mode_pr = 0
         self.msg.mode_machine = self._state.mode_machine
         self.start = self.measured()          # arms go back here before hand-back
-        self.waist = self._state.motor_state[WAIST_YAW].q
+        self.waist = self.waist_start = self._state.motor_state[WAIST_YAW].q
+        self.waist_target = self.waist
         self.cmd = self.start.copy()          # what we command right now (speed-limited)
         self.target = self.start.copy()       # where we want to go
         self.weight = 0.0
@@ -188,12 +189,19 @@ class ArmSdk:
         with self._lock:
             self.target = np.asarray(q, dtype=float).copy()
 
+    def set_waist_offset(self, yaw: float, limit: float = 0.15) -> None:
+        """Waist yaw relative to where it started (dance sway), capped at +-limit rad."""
+        with self._lock:
+            self.waist_target = self.waist_start + max(-limit, min(limit, yaw))
+
     def _loop(self) -> None:
         step = self.max_vel * self.dt
+        waist_step = 0.3 * self.dt  # the waist turns slowly: 0.3 rad/s at most
         while self._running:
             t0 = time.monotonic()
             with self._lock:
                 self.cmd = self.cmd + np.clip(self.target - self.cmd, -step, step)
+                self.waist += max(-waist_step, min(waist_step, self.waist_target - self.waist))
                 weight, cmd = self.weight, self.cmd.copy()
             for i, j in enumerate(ARM_JOINTS):
                 m = self.msg.motor_cmd[j]
@@ -224,8 +232,10 @@ class ArmSdk:
     def release(self, seconds: float = 2.0, settle_timeout: float = 6.0) -> None:
         """Glide back to the starting pose, then hand the arms back to the stock controller."""
         self.set_target(self.start)
+        self.set_waist_offset(0.0)
         deadline = time.monotonic() + settle_timeout
-        while time.monotonic() < deadline and np.max(np.abs(self.cmd - self.start)) > 0.02:
+        while time.monotonic() < deadline and (np.max(np.abs(self.cmd - self.start)) > 0.02
+                                               or abs(self.waist - self.waist_start) > 0.01):
             time.sleep(0.05)
         self._ramp(0.0, seconds)
         time.sleep(0.1)

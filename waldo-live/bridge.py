@@ -37,6 +37,7 @@ import aiohttp
 from aiohttp import web
 
 from commands import Commands, find_confirmation
+from dance_call import DANCE_INSTRUCTIONS, DANCE_TOOLS, DanceCall, turn_detection
 from phonecam import LOCAL_PORT as PHONE_LOCAL_PORT, PhoneCam, token as phone_token
 
 CONFIRM_WAIT_S = 4.0
@@ -48,7 +49,10 @@ PORT = 8771
 WS_PATH = "/ws/call"
 REALTIME_URL = "wss://api.openai.com/v1/realtime"
 SPEAK_GAP_S = 3.0  # at most one spoken camera alert per this many seconds
-FORWARDED = {"check_failed", "check_cleared", "stop_requested", "robot_stopped", "brain_progress", "call_requested"}
+FORWARDED = {"check_failed", "check_cleared", "stop_requested", "robot_stopped", "brain_progress", "call_requested",
+             "dance_started", "dance_stopped", "dance_error"}
+DANCE_EVENTS = {"dance_started", "dance_stopped", "dance_error"}
+DANCE_ME = re.compile(r"\bdance\b", re.I)
 
 INSTRUCTIONS = """You are Waldo, a robot in a robotics lab, on a phone call with your operator.
 You called because you need help with a task. Speak in short, natural sentences.
@@ -174,6 +178,7 @@ class CallSession:
     used_yes: set = field(default_factory=set)  # transcript times of yeses already spent on a motion
     end_reason: str = ""
     stats: collections.Counter = field(default_factory=collections.Counter)
+    dance: object = None  # DanceCall in dance mode
     inbound: AudioConverter | None = None
     outbound: AudioConverter | None = None
     stream_id: str | None = None
@@ -289,6 +294,9 @@ class Bridge:
                 except Exception as e:
                     await apublish(self.http, {"type": "call_failed", "error": str(e)})
                     print(f"call failed: {e}")
+            elif self.active is not None and event["type"] in DANCE_EVENTS:
+                if self.active.dance:
+                    await self.active.dance.on_bus(event)
             elif self.active is not None:
                 await self.active.inject(event)
 
@@ -330,11 +338,17 @@ class Bridge:
             ctx = json.loads(request.headers.get("X-Call-Context") or "{}")
         except ValueError:
             ctx = {}
-        mode = "command" if brief.get("mode") == "command" else "help"
+        mode = brief.get("mode") if brief.get("mode") in ("command", "dance") else "help"
         s = CallSession(inkbox, openai, self.http, brief, call_id=str(ctx.get("call_id") or ctx.get("id") or ""), mode=mode)
         self.active = s
         await apublish(self.http, {"type": "call_started", "call_id": s.call_id, "mode": mode})
-        instructions, tools = (COMMAND_INSTRUCTIONS, command_tools(self.commands.menu())) if mode == "command" else (INSTRUCTIONS, TOOLS)
+        if mode == "command":
+            instructions, tools = COMMAND_INSTRUCTIONS, command_tools(self.commands.menu())
+        elif mode == "dance":
+            instructions, tools = DANCE_INSTRUCTIONS, DANCE_TOOLS
+            s.dance = DanceCall(s, lambda event: apublish(self.http, event))
+        else:
+            instructions, tools = INSTRUCTIONS, TOOLS
         await s.send_openai({
             "type": "session.update",
             "session": {
@@ -345,13 +359,13 @@ class Bridge:
                               "transcription": {"model": "gpt-4o-mini-transcribe"},
                               # A bit less sensitive than the default so line echo of Waldo's own voice
                               # doesn't count as the operator interrupting.
-                              "turn_detection": {"type": "server_vad", "threshold": 0.65, "prefix_padding_ms": 300,
-                                                 "silence_duration_ms": 600, "create_response": True, "interrupt_response": True}},
+                              "turn_detection": turn_detection(auto=True)},
                     "output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": self.voice},
                 },
                 "tools": tools, "tool_choice": "auto",
             },
         })
+        ticker = asyncio.create_task(self._dance_ticks(s)) if s.dance else None
         try:
             await asyncio.gather(self._from_inkbox(s), self._from_openai(s))
         except Exception as e:
@@ -359,6 +373,8 @@ class Bridge:
             import traceback
             traceback.print_exc()
         finally:
+            if ticker:
+                ticker.cancel()
             s.closed = True
             self.active = None
             await openai.close()
@@ -366,11 +382,24 @@ class Bridge:
             await apublish(self.http, {"type": "call_ended", "call_id": s.call_id, "reason": s.end_reason, "stats": dict(s.stats)})
         return inkbox
 
+    async def _dance_ticks(self, s: CallSession) -> None:
+        while not s.closed:
+            await asyncio.sleep(1.0)
+            try:
+                await s.dance.tick()
+            except Exception as e:
+                print(f"dance tick: {e}")
+
     async def _greet(self, s: CallSession) -> None:
         if s.greeted:
             return
         s.greeted = True
         b = s.brief
+        if s.mode == "dance":
+            await s.send_openai(system_item("Call connected. Greet the operator as Waldo, say you'd love to dance, "
+                                            "and ask them to play a song into the phone."))
+            await s.respond()
+            return
         if s.mode == "command":
             await s.send_openai(system_item("Call connected. Greet the operator as Waldo and ask what you should do."))
             await s.respond()
@@ -407,6 +436,8 @@ class Bridge:
                 if payload and (converted := s.inbound.convert(payload)):
                     s.stats["in_frames"] += 1
                     await s.send_openai({"type": "input_audio_buffer.append", "audio": converted})
+                    if s.dance:
+                        s.dance.on_audio(base64.b64decode(converted))
             elif event in ("stop", "closed", "hangup"):
                 why = f"inkbox sent {event} ({frame.get('reason') or 'no reason'})"
                 break
@@ -468,6 +499,8 @@ class Bridge:
         s.transcripts.append((time.monotonic(), party, text))
         await s.send_inkbox({"event": "transcript", "party": party, "text": text, "is_final": True})
         await apublish(self.http, {"type": "call_transcript", "party": "operator" if party == "remote" else "waldo", "text": text})
+        if s.dance:
+            await s.dance.on_transcript(party, text)
 
     async def _tool(self, s: CallSession, name: str, call_id: str, raw_args: str) -> None:
         try:
@@ -485,10 +518,12 @@ class Bridge:
             output = {"ok": False, "error": str(e)}
         await s.send_openai({"type": "conversation.item.create",
                              "item": {"type": "function_call_output", "call_id": call_id, "output": json.dumps(output)}})
-        if name != "hang_up":
+        if name not in ("hang_up", "listen_for_music", "dance", "stop_dance"):  # dance tools: stay quiet over the music
             await s.respond()
 
     async def _run_tool(self, s: CallSession, name: str, args: dict) -> dict:
+        if s.dance and name in ("listen_for_music", "dance", "stop_dance"):
+            return await s.dance.run_tool(name, args)
         if name == "robot_status":
             try:
                 async with self.http.get(f"{BRAIN_URL}/status", timeout=3) as resp:
@@ -571,7 +606,12 @@ class Bridge:
                             or re.sub(r"\D", "", m.remote_number or "") != operator):
                         continue
                     seen.add(m.id)
-                    if CALL_ME.search(m.content or "") and self.active is None:
+                    text = m.content or ""
+                    if self.active is not None and self.active.dance:
+                        await self.active.dance.on_text(text)
+                    elif self.active is None and DANCE_ME.search(text):
+                        await apublish(self.http, {"type": "call_requested", "mode": "dance", "reason": "operator wants a dance"})
+                    elif self.active is None and CALL_ME.search(text):
                         await apublish(self.http, {"type": "call_requested", "mode": "command", "reason": "operator asked by text"})
             except Exception as e:
                 print(f"imessage poll: {e}")
@@ -646,7 +686,7 @@ if __name__ == "__main__":
     c.add_argument("reason", nargs="?", default="operator asked for a call")
     c.add_argument("question", nargs="?", default="")
     c.add_argument("--task", default="")
-    c.add_argument("--mode", choices=["help", "command"], default="help")
+    c.add_argument("--mode", choices=["help", "command", "dance"], default="help")
     args = parser.parse_args()
     if args.cmd == "serve":
         asyncio.run(serve())
