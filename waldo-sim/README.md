@@ -48,5 +48,14 @@ G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs
   Thin sheets need the **fingertips** aimed at them. Hands start below the desk top, so **lift clear before reaching**.
 * **Motion:** joint-space jumps swing the elbow through the torso/desk; straight-line hand paths in ~3 cm steps don't.
 * **Tape roll is 109 mm wide**, more than the Dex1's 95 mm opening: needs a rim pinch (not implemented yet).
+* **Success rates on the physics desk (ground-truth positions, 30 items each):**
+
+  | How the robot is driven | Result |
+  |---|---|
+  | `waldo-arms` MCP tools as shipped (`move_hand` above → down → `gripper close` → up) | **0/30**: every first move refused by the path check (a direct move out of the hanging pose would cross the desk edge) |
+  | `planner.py` over the same arm_server protocol | **8/30 (27%) sorted into the right container** |
+
+  The safety layer works (refuses instead of crashing); good movement comes from the planner. Next: expose the
+  planner as MCP tools (`pick`, `place`) so agents get it directly.
 * **Current sort rate: 8/30 (27%)** with ground-truth positions. Main remaining failures: wrist-turn collisions with the
   torso (elbow in), grasps that miss thin items, the tape.
