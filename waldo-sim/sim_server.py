@@ -162,9 +162,15 @@ class Sim:
         for i in range(self.m.nu):
             self.d.ctrl[i] = self.d.qpos[self.m.jnt_qposadr[self.m.actuator_trnid[i, 0]]]
 
+    viewer = None          # a mujoco.viewer window, if --viewer
+    _last_sync = 0.0
+
     def step(self, n=1):
         for _ in range(n):
             mujoco.mj_step(self.m, self.d)
+            if self.viewer is not None and time.monotonic() - self._last_sync > 1 / 60:
+                self._last_sync = time.monotonic()
+                self.viewer.sync()
 
     # ----- arms -----
     def arm_q(self, s):
@@ -251,10 +257,16 @@ class Sim:
                 mine = b1 if b1 in arm else b2
                 if s in contact_ok and mine in self.fing_body[s] and hit == 0:
                     continue
+                depth = -c.dist
+                own_body = hit not in self.containers.values() and hit != 0
+                # Convex-hull collision shapes are bulkier than the real links: tolerate <5 mm overlap against the
+                # robot's own body / other arm, ~1 mm (numerical) against the desk and containers.
+                if depth < (0.005 if own_body else 0.001):
+                    continue
                 what = ("the desk" if hg in self.static_geoms and hit == 0 else
                         next((n for n, b in self.containers.items() if b == hit), None) or
                         ("the other arm" if hit in other else m.body(hit).name))
-                bad.append(f"{m.body(mine).name} / {what}")
+                bad.append(f"{m.body(mine).name} / {what} ({-c.dist * 1000:.0f} mm deep)")
         d.qpos[:] = save
         mujoco.mj_forward(m, d)
         return bad
@@ -284,6 +296,26 @@ class Sim:
                 if lag > 0:
                     time.sleep(lag)
         self.step(100)                              # 0.2 s settle
+        self.moving = False
+
+    def follow(self, qs, times):
+        """Track a timed joint trajectory, interpolating linearly between samples (no per-segment easing)."""
+        qs, times = np.asarray(qs, float), np.asarray(times, float)
+        dt, t_wall = self.m.opt.timestep, time.monotonic()
+        self.moving = True
+        steps = max(1, int(times[-1] / dt))
+        for k in range(1, steps + 1):
+            t = k * dt
+            i = min(int(np.searchsorted(times, t, side="right")) - 1, len(times) - 2)
+            f = 1.0 if times[i + 1] == times[i] else min(1.0, (t - times[i]) / (times[i + 1] - times[i]))
+            q = qs[i] + (qs[i + 1] - qs[i]) * f
+            self.d.ctrl[self.act["left"]], self.d.ctrl[self.act["right"]] = q[:7], q[7:]
+            self.step()
+            if self.speed > 0:
+                lag = t / self.speed - (time.monotonic() - t_wall)
+                if lag > 0:
+                    time.sleep(lag)
+        self.step(75)
         self.moving = False
 
     # ----- grippers -----
@@ -326,6 +358,7 @@ class Sim:
                       "grip_jaw_deg": round((jaw + 90) % 180 - 90, 1), "width_mm": round(float(min(ex[0], ex[1])) * 1000, 1),
                       "height_mm": round(float(ex[2]) * 1000, 1),
                       "category": scene.ITEMS[n][4], "in_container": inside,
+                      **({"rim_radius_m": 0.0465} if n == "tape" else {}),     # 3M roll: 76 mm core, 111 mm outside
                       "held_by": next((s for s in SIDES if self.holding(s) == n), None),
                       "lifted_m": round(float(p[2] - self.desk.top_z), 4)}
         return out
@@ -393,6 +426,21 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
         sim.move(goal, float(r.get("duration", 3.0)))
         p, _ = sim.grasp_pose(side)
         return {**out, "duration": r.get("duration", 3.0), "check": chk, "reached_err": round(float(np.linalg.norm(p - xyz)), 4)}
+    if cmd == "trajectory":                          # like the real arm_server: q [n,14], times [n]; every sample checked
+        if not sim.enabled:
+            raise RuntimeError("not enabled")
+        q, times = np.asarray(r["q"], float), np.asarray(r["times"], float)
+        if q.ndim != 2 or q.shape[1] != 14 or times.shape != (len(q),):
+            raise ValueError("trajectory needs q [n,14] and times [n]")
+        ok_sides = (side,) if r.get("contact") else ()
+        cur = sim.q14()
+        for k, qk in enumerate(q):
+            chk = sim.sweep(cur, qk, contact_ok=ok_sides)
+            if not chk["ok"] and not r.get("force"):
+                raise ValueError(f"path check: {chk['reason']} (trajectory sample {k})")
+            cur = qk
+        sim.follow(q, times)                       # timing is already shaped by the client: follow it as given
+        return {"duration": float(times[-1]), "samples": int(len(q))}
     if cmd == "check":
         q = np.asarray(r["q"], float) if "q" in r else None
         if q is None:
@@ -420,6 +468,20 @@ def handle(sim: Sim, r: dict, cam_project) -> dict:
     if cmd == "sim_reset":
         sim.reset(int(r.get("seed", 0)), r.get("n_items"))
         return {"objects": sim.objects()}
+    if cmd == "sim_reset_arms":                     # sim-only: put both arms back to hanging (benchmark isolation)
+        for sd in SIDES:
+            for j, a in zip(ARM, sim.qadr[sd]):
+                sim.d.qpos[a] = HANG.get(j, 0.0) * (-1 if (sd == "right" and j == "shoulder_roll") else 1)
+            for a in sim.fing_q[sd]:
+                sim.d.qpos[a] = FINGER[1]
+        sim.d.qvel[:sim.m.nv] = 0
+        mujoco.mj_forward(sim.m, sim.d)
+        sim._hold_ctrl()
+        for sd in SIDES:
+            for a in sim.fing_act[sd]:
+                sim.d.ctrl[a] = FINGER[1]
+        sim.step(100)
+        return {}
     if cmd == "sim_objects":
         return {"objects": sim.objects(), "desk_top_z": sim.desk.top_z,
                 "containers": {n: {"category": c[3], "box_min": sim.box[n][0].round(3).tolist(), "box_max": sim.box[n][1].round(3).tolist()}
@@ -442,9 +504,15 @@ def main():
     ap.add_argument("--speed", type=float, default=1.0, help="sim-time / wall-time while moving; 0 = as fast as possible")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--desk-top", type=float, default=scene.Desk.top_z, help="desk top z in the pelvis frame (m)")
+    ap.add_argument("--viewer", action="store_true", help="open the interactive MuJoCo viewer window (watch it live)")
     a = ap.parse_args()
     sim = Sim(a.speed, scene.Desk(top_z=a.desk_top))
     sim.reset(a.seed)
+    if a.viewer:
+        from mujoco import viewer as mj_viewer   # (a plain `import mujoco.viewer` here would shadow `mujoco` in main)
+        sim.viewer = mj_viewer.launch_passive(sim.m, sim.d, show_left_ui=False, show_right_ui=False)
+        sim.viewer.cam.lookat[:] = [0.25, 0.0, -0.05]
+        sim.viewer.cam.distance, sim.viewer.cam.azimuth, sim.viewer.cam.elevation = 1.6, 200, -25
     m = sim.m
     head, fy = m.cam("head_camera").id, scene.FY
     K = {"fx": fy, "fy": fy, "ppx": W / 2, "ppy": H / 2}

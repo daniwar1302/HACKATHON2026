@@ -43,8 +43,8 @@ class Desk:
 
 # Items: name -> (kind, size/params, mass kg, rgba or gso model, category)
 ITEMS = {
-    "marker_black": ("capsule", (0.0085, 0.055), 0.015, (0.08, 0.08, 0.08, 1), "writing"),
-    "marker_blue": ("capsule", (0.0085, 0.055), 0.015, (0.1, 0.25, 0.85, 1), "writing"),
+    "marker_black": ("capsule", (0.0085, 0.0595), 0.015, (0.08, 0.08, 0.08, 1), "writing"),
+    "marker_blue": ("capsule", (0.0085, 0.0595), 0.015, (0.1, 0.25, 0.85, 1), "writing"),
     "pen": ("capsule", (0.005, 0.065), 0.010, (0.9, 0.9, 0.95, 1), "writing"),
     "pencil": ("cylinder", (0.0042, 0.088), 0.006, (0.95, 0.75, 0.1, 1), "writing"),
     "eraser": ("box", (0.025, 0.011, 0.006), 0.020, (0.95, 0.55, 0.65, 1), "supplies"),

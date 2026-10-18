@@ -24,7 +24,9 @@ crayons. Sorting: writing → pen cup, supplies → tray, tools → caddy. Items
 |---|---|
 | `scene.py` | builds the model: URDF + actuators + Dex1 pads + head camera + desk + containers + items |
 | `sim_server.py` | the protocol server: IK (jaw centre, level jaws or a given `R`), path collision sweep, grasping, scoring |
-| `planner.py` | pick-and-place over the **arm_server protocol** (works on the real robot too): straight-line hand paths, lift-clear route, level-jaw tilted approach, wrist turned gradually, contact stage for the final descent |
+| `../waldo-arms/planner.py` | pick-and-place over the **arm_server protocol** (works on the real robot too): candidate grasps screened by IK, grip verified, recovery + retries, level-jaw tilted approach, contact stage, fingertip and rim grasps |
+| `../waldo-arms/motion.py` | **collision-free motion planning** on a MuJoCo digital twin (RRT-Connect + shortcutting) and **smooth min-jerk trajectories** sent through arm_server's `trajectory` command |
+| `media/waldo_sim_sort.gif` | ~30 s of the sim sorting in real time |
 | `bench_sort.py` | N seeded desks, every item picked and dropped in its container, scored on where it lands |
 | `fetch_assets.sh` | pulls the URDF/meshes from Waldo and the scanned objects (assets aren't in git) |
 
@@ -33,7 +35,7 @@ crayons. Sorting: writing → pen cup, supplies → tray, tools → caddy. Items
 ```sh
 ./waldo-sim/fetch_assets.sh
 MUJOCO_GL=glfw uv run --with mujoco --with pyzmq --with pillow --with numpy waldo-sim/sim_server.py --speed 0   # 1 = real time
-uv run --with pyzmq --with numpy waldo-sim/bench_sort.py --trials 10 --items 3 --truth   # or --noise-px 4 for the vision path
+uv run --with mujoco --with pyzmq --with numpy waldo-sim/bench_sort.py --trials 10 --items 3 --truth   # or --noise-px 4 for the vision path
 ```
 Any MCP client can drive it through `waldo-arms` with `G1_ARM_ADDR=tcp://localhost:15810 G1_CAM_BASE=http://localhost:18766
 G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs a GL context (`glfw` in a desktop session).
@@ -57,5 +59,5 @@ G1_CAM_HOST=localhost G1_DEPTH_PORT=15556 G1_CAMCFG_PORT=16000`. Rendering needs
 
   The safety layer works (refuses instead of crashing); good movement comes from the planner. Next: expose the
   planner as MCP tools (`pick`, `place`) so agents get it directly.
-* **Current sort rate: 8/30 (27%)** with ground-truth positions. Main remaining failures: wrist-turn collisions with the
+* **Current sort rate: 10/30 (33%)** with ground-truth positions, after motion planning + smooth trajectories (was 8/30). Main remaining failures: wrist-turn collisions with the
   torso (elbow in), grasps that miss thin items, the tape.

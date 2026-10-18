@@ -16,9 +16,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "waldo-arms"))
-from planner import Arm, PlanError, Planner  # noqa: E402
+from planner import Arm, PlanError, Planner  # noqa: E402  (the shared planner the MCP server uses)
 
 DROP = {"writing": "pen_cup", "supplies": "tray", "tools": "caddy"}
 
@@ -69,37 +68,33 @@ def main():
             why = ""
             if xyz is None:
                 why = "vision: no depth at the point"
-            elif o["width_mm"] > 90:
+            elif o["width_mm"] > 92 and "rim_radius_m" not in o:
                 why = f"too wide for the gripper ({o['width_mm']} mm)"
             else:
-                # jaw centre at the item's centre height, 2 mm lower for thin items (fingertips may brush the desk);
-                # truth xyz is the centre, the vision path returns the top surface
                 h = o["height_mm"] / 1000
-                grip_dz = (-0.002 if h < 0.025 else 0.0) - (0 if a.truth else h / 2)
-                order = ["left", "right"] if xyz[1] > 0 else ["right", "left"]
-                tried = []
-                for side in order:
-                    try:
-                        p.pick(side, xyz, o["grip_jaw_deg"], grip_dz=grip_dz, thin=o["height_mm"] < 6)
-                        p.place(side, box["box_min"], box["box_max"])
-                        p.home(side)
-                        why = ""
-                        break
-                    except PlanError as e:
-                        tried.append(f"{side}: {e}")
-                        why = tried[0]          # the preferred hand's failure is the informative one
-                        try:
-                            arm("open", side=side)
-                            p.home(side)
-                        except PlanError:
-                            pass
+                centre = np.array(xyz) if a.truth else np.array(xyz) - [0, 0, h / 2]   # vision gives the top surface
+                try:
+                    r = p.pick_item(centre, o["grip_jaw_deg"], height_m=h, rim_radius_m=o.get("rim_radius_m"))
+                    p.place(r["side"], box["box_min"], box["box_max"])
+                    p.home(r["side"])
+                    if len(r["attempts"]) > 1:
+                        why = f"(ok after {len(r['attempts'])} tries)"
+                except PlanError as e:
+                    why = str(e)
+                    stuck = not all([p.recover("left"), p.recover("right")])
+                    if stuck:
+                        stats["recovery failures"] += 1
+                        arm("sim_reset_arms")          # isolate items: one stuck arm doesn't spoil the rest of the desk
+                        p.R = {"left": None, "right": None}
             final = arm("sim_objects")["objects"][name]
             ok = final["in_container"] == target
             stats["sorted" if ok else "missed"] += 1
             if not ok:
-                fails[(why.split(":")[1].strip() if ":" in why else why) or f"landed in {final['in_container']}"] += 1
-            print(f"seed {seed:2d} {name:14s} -> {target:8s} {'OK ' if ok else 'MISS'} {why[:95]}", flush=True)
-    print(f"\nsorted {stats['sorted']}/{n} ({100 * stats['sorted'] / max(n, 1):.0f}%) in {time.time() - t0:.0f} s"
+                last = why.split("; ")[-1]
+                fails[(last.split(":")[1].strip()[:40] if ":" in last else last) or f"landed in {final['in_container']}"] += 1
+            print(f"seed {seed:2d} {name:14s} -> {target:8s} {'OK ' if ok else 'MISS'} {why}", flush=True)
+    print(f"\nrecovery failures (arms reset): {stats['recovery failures']}")
+    print(f"sorted {stats['sorted']}/{n} ({100 * stats['sorted'] / max(n, 1):.0f}%) in {time.time() - t0:.0f} s"
           f"  [{'ground-truth positions' if a.truth else f'vision path, {a.noise_px} px noise'}]")
     for k, v in fails.most_common():
         print(f"  {v:3d}  {k}")
