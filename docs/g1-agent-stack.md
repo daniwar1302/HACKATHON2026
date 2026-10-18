@@ -17,7 +17,7 @@ arms only) and a MuJoCo digital twin of it that speaks the robot's real protocol
 Fixtured parts and taught moves are how production cells reach high reliability; the agent works above them, deciding,
 sensing, verifying and reacting.
 
-**Video (111 s):** [`waldo-sim/media/g1_agents_demo.mp4`](../waldo-sim/media/g1_agents_demo.mp4): four runs (IT, SRE, firmware, machine tending)
+**Video (133 s):** [`waldo-sim/media/g1_agents_demo.mp4`](../waldo-sim/media/g1_agents_demo.mp4): five runs (IT, SRE, app QA, firmware, machine tending)
 below, unscripted, with Claude's reasoning and tool calls captioned at the moment they happened.
 
 ## Demos (one command each, in the sim)
