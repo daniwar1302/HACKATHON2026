@@ -17,6 +17,19 @@ agent can check its own work.
 | `park` | lift, then go to the ready pose `[0.28, ±0.20, 0.05]` |
 | `look(camera)` | one JPEG from `head_camera` (the robot's view) or `waldo_webcam` |
 
+**Seeing → acting (VLM-driven):**
+
+| Tool | What it does |
+|------|--------------|
+| `look(camera, annotate=true)` | head image (640×480) with an 80 px pixel grid and the robot's own L/R hand positions projected on it (a live calibration check) |
+| `point_to_xyz([[u, v], …], scale)` | image points → pelvis-frame xyz for `move_hand`. `scale`: `pixels`, `norm1000` (Gemini Robotics-ER style) or `norm1`. One depth frame for all points; robust median depth with a confidence score |
+
+How it works: aligned head depth (teleimager :55556, raw z16) → pinhole intrinsics (asked live from teleimager :60000)
+→ camera mount from Unitree's URDF (`d435_joint`: 43 cm up, 47.6° down) → live waist angles (`T_pelvis_torso` from
+arm_server) → pelvis frame. Depth is fetched on demand (newest frame only, cached 150 ms), nothing streams in the
+background; ~1–4 ms per call once a frame is cached. Math and self-check in `vision.py` (`python vision.py`).
+Michael's measured `camera-pose-head.json` can replace the URDF mount once it's verified against the overlay.
+
 **Codifying what works into routines:**
 
 | Tool | What it does |
@@ -41,17 +54,18 @@ Needs the robot in FSM 500/501/801, `arm_server.py` running on the Jetson, and *
 
 On Waldo (reaches the Jetson and cameras directly):
 ```sh
-claude mcp add waldo-arms -- ssh waldo@100.120.182.66 'cd ~/HACKATHON2026/waldo-arms && ~/.local/bin/uv run --with "mcp>=2.2" --with pyzmq server.py'
+claude mcp add waldo-arms -- ssh waldo@100.120.182.66 'cd ~/HACKATHON2026/waldo-arms && ~/.local/bin/uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow server.py'
 ```
 From a laptop with tunnels:
 ```sh
-ssh -i ~/.ssh/id_ed25519_waldo -N -L 5810:192.168.123.164:5810 -L 8766:10.2.1.180:8766 waldo@100.120.182.66
-claude mcp add waldo-arms -e G1_ARM_ADDR=tcp://localhost:5810 -e G1_CAM_BASE=http://localhost:8766 \
-  -- uv run --with "mcp>=2.2" --with pyzmq ~/HACKATHON2026/waldo-arms/server.py
+ssh -i ~/.ssh/id_ed25519_waldo -N -L 5810:192.168.123.164:5810 -L 8766:10.2.1.180:8766 \
+  -L 55556:192.168.123.164:55556 -L 60000:192.168.123.164:60000 waldo@100.120.182.66
+claude mcp add waldo-arms -e G1_ARM_ADDR=tcp://localhost:5810 -e G1_CAM_BASE=http://localhost:8766 -e G1_CAM_HOST=localhost \
+  -- uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow ~/HACKATHON2026/waldo-arms/server.py
 ```
 For the brain (`waldo-live`), add it to `~/.waldo/brain.json` next to `g1`:
 ```json
-"arms": {"command": "/home/waldo/.local/bin/uv", "args": ["run", "--with", "mcp>=2.2", "--with", "pyzmq", "/home/waldo/HACKATHON2026/waldo-arms/server.py"]}
+"arms": {"command": "/home/waldo/.local/bin/uv", "args": ["run", "--with", "mcp>=2.2", "--with", "pyzmq", "--with", "numpy", "--with", "pillow", "/home/waldo/HACKATHON2026/waldo-arms/server.py"]}
 ```
 
 A task then reads: `look` → decide a target → `check_reach` → `move_hand` (steps of ≤ 15 cm) → `look` →

@@ -6,8 +6,10 @@ This server only exposes its commands as agent tools, adds a table floor, and se
 
 Runs on Waldo (talks to 192.168.123.164:5810 directly) or on a laptop with tunnels:
   ssh -N -L 5810:192.168.123.164:5810 -L 8766:10.2.1.180:8766 waldo@100.120.182.66
-  G1_ARM_ADDR=tcp://localhost:5810 G1_CAM_BASE=http://localhost:8766 uv run --with "mcp>=2.2" --with pyzmq server.py
+  G1_ARM_ADDR=tcp://localhost:5810 G1_CAM_BASE=http://localhost:8766 G1_CAM_HOST=localhost \
+    uv run --with "mcp>=2.2" --with pyzmq --with numpy --with pillow server.py   (also tunnel 55556 + 60000)
 """
+import io
 import json
 import os
 import re
@@ -15,14 +17,23 @@ import time
 import urllib.request
 from pathlib import Path
 
+import numpy as np
+
 import zmq
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError  # message reaches the agent; plain exceptions don't
 from mcp.server.mcpserver.utilities.types import Image
 
+import vision
+
 ADDR = os.environ.get("G1_ARM_ADDR", "tcp://192.168.123.164:5810")
 CAM = os.environ.get("G1_CAM_BASE", "http://10.2.1.180:8766")
 WS = {"x": (0.10, 0.60), "y": (-0.55, 0.55), "z": (-0.35, 0.45)}  # arm_server's pelvis-frame workspace (m)
+CAM_HOST = os.environ.get("G1_CAM_HOST", "192.168.123.164")   # the Jetson's teleimager (depth + camera config)
+DEPTH_PORT, CAMCFG_PORT = int(os.environ.get("G1_DEPTH_PORT", "55556")), int(os.environ.get("G1_CAMCFG_PORT", "60000"))
+# Head camera config as teleimager reported it on 2026-10-17 (used only if the live request fails).
+HEAD_FALLBACK = {"image_shape": [480, 640], "depth_scale": 0.001,
+                 "color_intrinsics": {"fx": 604.9346, "fy": 604.4344, "ppx": 326.5778, "ppy": 247.7904}}
 TABLE_CLEARANCE = 0.03  # hand targets stay this far above a declared table top
 table_z = None
 ROUTINES = Path(os.environ.get("G1_ROUTINES", Path(__file__).resolve().parent / "routines"))
@@ -34,6 +45,8 @@ mcp = MCPServer("waldo-arms", instructions=(
     "Frame: pelvis, metres, x forward, y left, z up. Hands hang near [0.04, +-0.25, -0.21]; ready pose "
     "[0.28, +-0.20, 0.05]; reachable box x 0.10-0.60, y +-0.55, z -0.35-0.45. "
     "Workflow: status -> enable -> look / check_reach -> move_hand (small steps) -> gripper -> release when done. "
+    "Seeing -> acting: look (annotated head image, 640x480) -> pick the target pixel (or have a VLM point) -> "
+    "point_to_xyz([[u, v]]) -> move_hand to that xyz (approach from above: same x/y, z + 0.08 first). "
     "Use look after moves to verify. freeze holds in place; release hands the arms back to Unitree's controller. "
     "The robot must be in FSM 500/501/801 (status shows it); you cannot change that here. "
     "CODIFYING: every successful move_hand / gripper / set_table / park is recorded as a JSON step. When a "
@@ -324,17 +337,151 @@ def run_routine(name: str, dry_run: bool = True) -> dict:
     return {"routine": name, "ran_steps": len(done), "ok": True}
 
 
+# ---------- vision: pixels <-> pelvis-frame targets ----------
+_cfg, _depth_cache = None, (0.0, None)
+
+
+def _head_config() -> dict:
+    """Head camera intrinsics + depth scale, asked once from teleimager's config responder (port 60000)."""
+    global _cfg
+    if _cfg is None:
+        sock = zmq.Context.instance().socket(zmq.REQ)
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.setsockopt(zmq.RCVTIMEO, 1500)
+        try:
+            sock.connect(f"tcp://{CAM_HOST}:{CAMCFG_PORT}")
+            sock.send(b"cfg")
+            head = json.loads(sock.recv())["head_camera"]
+            _cfg = {"image_shape": head["image_shape"], "depth_scale": float(head.get("depth_scale", 0.001)),
+                    "color_intrinsics": head["color_intrinsics"], "source": "live"}
+        except (zmq.Again, KeyError, ValueError):
+            _cfg = dict(HEAD_FALLBACK, source="fallback")
+        finally:
+            sock.close()
+    return _cfg
+
+
+def _depth_m() -> np.ndarray:
+    """Latest aligned head depth frame in metres. One short-lived SUB (CONFLATE: newest frame only), cached 150 ms,
+    so a burst of point queries costs one frame and nothing streams in the background."""
+    global _depth_cache
+    t, frame = _depth_cache
+    if frame is not None and time.monotonic() - t < 0.15:
+        return frame
+    cfg = _head_config()
+    h, w = cfg["image_shape"]
+    sock = zmq.Context.instance().socket(zmq.SUB)
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.setsockopt(zmq.CONFLATE, 1)
+    sock.setsockopt(zmq.RCVTIMEO, 1500)
+    sock.setsockopt_string(zmq.SUBSCRIBE, "")
+    try:
+        sock.connect(f"tcp://{CAM_HOST}:{DEPTH_PORT}")
+        raw = sock.recv()
+    except zmq.Again:
+        raise ToolError(f"no depth frame from {CAM_HOST}:{DEPTH_PORT} in 1.5 s (teleimager down, or tunnel missing)")
+    finally:
+        sock.close()
+    if len(raw) == h * w * 2:                      # raw z16, aligned to color
+        z = np.frombuffer(raw, np.uint16).reshape(h, w)
+    elif raw[:8] == b"\x89PNG\r\n\x1a\n":          # 16-bit PNG, if the server compresses
+        from PIL import Image as PILImage
+        z = np.asarray(PILImage.open(io.BytesIO(raw)))
+    else:
+        raise ToolError(f"unexpected depth message: {len(raw)} bytes (expected {h}x{w}x2 raw z16 or PNG)")
+    frame = z.astype(np.float32) * cfg["depth_scale"]
+    _depth_cache = (time.monotonic(), frame)
+    return frame
+
+
+def _pelvis_from_cam() -> tuple[np.ndarray, str]:
+    """Camera pose in the pelvis frame, with the live waist angles from arm_server when it's up."""
+    try:
+        T_pt = arm("state", timeout_s=3).get("T_pelvis_torso")
+        if T_pt:
+            return vision.pelvis_from_cam(np.array(T_pt)), "live waist"
+    except ToolError:
+        pass
+    return vision.pelvis_from_cam(np.eye(4)), "waist assumed straight (arm_server unreachable)"
+
+
 @mcp.tool()
-def look(camera: str = "head_camera") -> Image:
-    """One JPEG frame: 'head_camera' (the robot's eyes, looking down at the workspace) or 'waldo_webcam' (room view)."""
+def point_to_xyz(points: list[list[float]], scale: str = "pixels") -> dict:
+    """Turn points on the head-camera image into hand targets: [[u, v], ...] -> pelvis-frame xyz (m) for move_hand.
+    scale: 'pixels' (640x480 head image, as look returns it), 'norm1000' (0-1000, Gemini Robotics-ER style) or
+    'norm1' (0-1). All points share one depth frame. confidence = fraction of valid depth around the point
+    (low: dark/shiny/edge; 0 means it searched wider to find any). Point at the part you want the jaws to reach."""
+    t0 = time.monotonic()
+    if not points or len(points) > 32:
+        raise ToolError("give 1-32 points as [[u, v], ...]")
+    cfg = _head_config()
+    h, w = cfg["image_shape"]
+    K = cfg["color_intrinsics"]
+    depth = _depth_m()
+    T, waist = _pelvis_from_cam()
+    out = []
+    for pt in points:
+        try:
+            u, v = vision.to_pixels(float(pt[0]), float(pt[1]), scale, w, h)
+        except (ValueError, TypeError, IndexError):
+            raise ToolError(f"bad point {pt!r}; scale must be pixels, norm1000 or norm1")
+        z, conf = vision.depth_at(depth, u, v)
+        if z is None:
+            out.append({"u": round(u, 1), "v": round(v, 1), "xyz": None, "why": "no valid depth here (outside image, too close/far, or a hole)"})
+            continue
+        xyz = vision.pixel_to_pelvis(u, v, z, K, T)
+        inside = all(WS[k][0] <= c <= WS[k][1] for k, c in zip("xyz", xyz))
+        out.append({"u": round(u, 1), "v": round(v, 1), "xyz": [round(float(c), 4) for c in xyz],
+                    "depth_m": round(z, 3), "confidence": round(conf, 2), "in_reach_box": inside})
+    return {"points": out, "camera_config": cfg["source"], "mount": "URDF d435_joint", "waist": waist,
+            "ms": round((time.monotonic() - t0) * 1000)}
+
+
+def _annotate(jpeg: bytes) -> bytes:
+    """Pixel grid every 80 px with coordinates, and both hands' computed positions projected onto the image.
+    If the L/R dots sit on the real grippers, the camera calibration is right."""
+    from PIL import Image as PILImage, ImageDraw
+    im = PILImage.open(io.BytesIO(jpeg)).convert("RGB")
+    d = ImageDraw.Draw(im)
+    W, H = im.size
+    for x in range(80, W, 80):
+        d.line([(x, 0), (x, H)], fill=(255, 255, 0), width=1)
+        d.text((x + 2, 2), str(x), fill=(255, 255, 0))
+    for y in range(80, H, 80):
+        d.line([(0, y), (W, y)], fill=(255, 255, 0), width=1)
+        d.text((2, y + 2), str(y), fill=(255, 255, 0))
+    try:
+        r = arm("state", timeout_s=3)
+        T = vision.pelvis_from_cam(np.array(r["T_pelvis_torso"]))
+        K = _head_config()["color_intrinsics"]
+        for label, key, col in (("L", "fk", (0, 255, 0)), ("R", "fk_right", (255, 0, 255))):
+            xyz = (r.get(key) or {}).get("grasp_xyz")
+            px = vision.pelvis_to_pixel(xyz, K, T) if xyz else None
+            if px and 0 <= px[0] < W and 0 <= px[1] < H:
+                d.ellipse([px[0] - 7, px[1] - 7, px[0] + 7, px[1] + 7], outline=col, width=3)
+                tx = px[0] + 9 if px[0] < W - 60 else px[0] - 55   # keep the label inside the image
+                d.text((tx, px[1] - 6), f"{label} hand", fill=col)
+    except (ToolError, KeyError, TypeError):
+        d.text((8, H - 16), "hand overlay unavailable (arm_server down)", fill=(255, 80, 80))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
+@mcp.tool()
+def look(camera: str = "head_camera", annotate: bool = True) -> Image:
+    """One JPEG frame: 'head_camera' (the robot's eyes, 640x480, looking down at the workspace) or 'waldo_webcam'
+    (room view). For the head camera, annotate=true adds a pixel grid (every 80 px) and marks where the robot thinks
+    each hand is (L/R): use the grid to name points for point_to_xyz, and the marks to check a move landed."""
     if camera not in ("head_camera", "waldo_webcam"):
         raise ToolError("camera must be head_camera or waldo_webcam")
     try:
         with urllib.request.urlopen(f"{CAM}/frame/{camera}.jpg", timeout=5) as r:
-            return Image(data=r.read(), format="jpeg")
+            data = r.read()
     except OSError as e:
         raise ToolError(f"camera unreachable at {CAM} ({e}). On a laptop, open the 8766 tunnel to waldo; "
                         "if the head feed is stalled, restart g1-camera-viewer on waldo")
+    return Image(data=_annotate(data) if annotate and camera == "head_camera" else data, format="jpeg")
 
 
 if __name__ == "__main__":
